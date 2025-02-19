@@ -10,6 +10,38 @@ use crossterm::{
 use std::fmt::format;
 use std::io::{self, Write};
 
+const NAME: &str = env!("CARGO_PKG_NAME");
+
+pub fn print_prompt() -> io::Result<()> {
+    execute!(std::io::stdout(), cursor::MoveToNextLine(0))?;
+    io::stdout()
+        .execute(style::SetAttribute(style::Attribute::Bold))?
+        .execute(style::Print(format!("{}> ", NAME)))?
+        .execute(style::SetAttribute(style::Attribute::Reset))?;
+    io::stdout().flush()?;
+    Ok(())
+}
+
+pub fn print_continue_prompt() -> io::Result<()> {
+    execute!(std::io::stdout(), cursor::MoveToNextLine(0))?;
+    io::stdout()
+        .execute(style::SetAttribute(style::Attribute::Bold))?
+        .execute(style::Print(format!("\n       -> ")))?
+        .execute(style::SetAttribute(style::Attribute::Reset))?;
+    io::stdout().flush()?;
+    io::stdout().flush()?;
+    Ok(())
+}
+
+pub fn println(s: String) -> io::Result<()> {
+    for l in s.lines() {
+        io::stdout().execute(style::Print(format!("{}\n", l)))?;
+        execute!(std::io::stdout(), cursor::MoveToNextLine(0))?;
+        io::stdout().flush()?;
+    }
+    Ok(())
+}
+
 pub fn echo(s: String) {
     if let Err(e) = io::stdout().execute(style::Print(format!("{}", s))) {}
     if let Err(e) = io::stdout().flush() {}

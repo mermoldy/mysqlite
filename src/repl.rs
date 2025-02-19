@@ -4,6 +4,7 @@ use crate::echo;
 use crate::echo_lines;
 use crate::error;
 
+use crate::console::{print_continue_prompt, print_prompt};
 use crate::errors;
 use crossterm::{
     cursor,
@@ -15,7 +16,6 @@ use std::fmt::format;
 use std::io::{self, Write};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
-const NAME: &str = env!("CARGO_PKG_NAME");
 const DESCRIPTION: &str = env!("CARGO_PKG_DESCRIPTION");
 
 const BANNER: &str = r#"
@@ -30,36 +30,6 @@ Note that all text commands must be first on line and end with ';'
 open      (\open) Open a persistent database.
 quit      (\q) Quit mySQLite.
 r"#;
-
-fn print_prompt() -> io::Result<()> {
-    execute!(std::io::stdout(), cursor::MoveToNextLine(0))?;
-    io::stdout()
-        .execute(style::SetAttribute(style::Attribute::Bold))?
-        .execute(style::Print(format!("{}> ", NAME)))?
-        .execute(style::SetAttribute(style::Attribute::Reset))?;
-    io::stdout().flush()?;
-    Ok(())
-}
-
-fn print_continue_prompt() -> io::Result<()> {
-    execute!(std::io::stdout(), cursor::MoveToNextLine(0))?;
-    io::stdout()
-        .execute(style::SetAttribute(style::Attribute::Bold))?
-        .execute(style::Print(format!("\n       -> ")))?
-        .execute(style::SetAttribute(style::Attribute::Reset))?;
-    io::stdout().flush()?;
-    io::stdout().flush()?;
-    Ok(())
-}
-
-fn println(s: String) -> io::Result<()> {
-    for l in s.lines() {
-        io::stdout().execute(style::Print(format!("{}\n", l)))?;
-        execute!(std::io::stdout(), cursor::MoveToNextLine(0))?;
-        io::stdout().flush()?;
-    }
-    Ok(())
-}
 
 pub fn repl_loop() -> Result<(), errors::Error> {
     echo!("Welcome to the mySQLiteite {} REPL.\n", VERSION);
@@ -122,22 +92,6 @@ pub fn repl_loop() -> Result<(), errors::Error> {
         };
     }
     Ok(())
-}
-
-pub fn main() -> Result<(), errors::Error> {
-    terminal::enable_raw_mode()?;
-    execute!(std::io::stdout(), cursor::EnableBlinking);
-    io::stdout().execute(terminal::Clear(terminal::ClearType::FromCursorDown))?;
-    match repl_loop() {
-        Ok(_) => {
-            terminal::disable_raw_mode()?;
-            Ok(())
-        }
-        Err(e) => {
-            terminal::disable_raw_mode()?;
-            Err(e)
-        }
-    }
 }
 
 fn read_input(
@@ -224,4 +178,20 @@ fn read_input(
     }
 
     Ok(())
+}
+
+pub fn main() -> Result<(), errors::Error> {
+    terminal::enable_raw_mode()?;
+    execute!(std::io::stdout(), cursor::EnableBlinking);
+    io::stdout().execute(terminal::Clear(terminal::ClearType::FromCursorDown))?;
+    match repl_loop() {
+        Ok(_) => {
+            terminal::disable_raw_mode()?;
+            Ok(())
+        }
+        Err(e) => {
+            terminal::disable_raw_mode()?;
+            Err(e)
+        }
+    }
 }
