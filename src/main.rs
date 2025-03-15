@@ -1,12 +1,15 @@
 #![allow(warnings)]
 #![allow(dead_code)]
-mod cmdproc;
+mod command;
 mod console;
+mod database;
 mod errors;
-mod pager;
 mod repl;
-
+mod session;
+mod storage;
 use clap::Parser;
+use tracing::info;
+use tracing_subscriber;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -23,12 +26,14 @@ struct Cli {
 }
 
 fn main() {
+    tracing_subscriber::fmt::init();
+
     let cli = Cli::parse();
 
     if let Some(statement) = cli.command {
-        match cmdproc::parse(statement.as_str()) {
+        match command::parse(statement.as_str()) {
             Ok(s) => {
-                cmdproc::execute(s);
+                command::execute(s);
                 echo!("\n");
             }
             Err(e) => {

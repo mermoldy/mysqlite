@@ -1,5 +1,5 @@
 /// The RAW console module.
-use crate::cmdproc;
+use crate::command;
 use crate::errors;
 use crossterm::{
     cursor,

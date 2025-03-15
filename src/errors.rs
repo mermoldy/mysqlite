@@ -4,6 +4,7 @@ use std::fmt;
 #[derive(Debug)]
 pub enum Error {
     Io(std::io::Error),
+    Db(String),
     Syntax(String),
     Other(String),
 }
@@ -11,9 +12,10 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Error::Io(e) => write!(f, "IO error: {}", e),
-            Error::Syntax(msg) => write!(f, "SQL Syntax Error: {}", msg),
-            Error::Other(msg) => write!(f, "Error: {}", msg),
+            Error::Io(e) => write!(f, "IO error. {}", e),
+            Error::Db(msg) => write!(f, "DB Error. {}", msg),
+            Error::Syntax(msg) => write!(f, "SQL Syntax Error. {}", msg),
+            Error::Other(msg) => write!(f, "Error. {}", msg),
         }
     }
 }
