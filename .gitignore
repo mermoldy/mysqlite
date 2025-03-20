@@ -21,6 +21,8 @@ Cargo.lock
 #.idea/
 
 # Added by cargo
-
 /target
+
+# Project files
 /data
+*.log

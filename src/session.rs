@@ -1,3 +1,4 @@
+use clap::builder::Str;
 use tracing_subscriber::registry::Data;
 
 use crate::{
@@ -6,15 +7,16 @@ use crate::{
 };
 
 pub struct Session {
-    database: database::Database,
+    pub database: database::Database,
 }
 
 impl Session {
     pub fn open() -> Result<Self, errors::Error> {
         Ok(Session {
-            database: Database::open("default".into())?,
+            database: Database::get_or_create(&"default".into())?,
         })
     }
+
     pub fn close(&mut self) -> Result<(), errors::Error> {
         self.database.flush()?;
         Ok(())

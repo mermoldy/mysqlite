@@ -1,4 +1,4 @@
-# mysqlite
+# marble
 
 A playground for learning database stuff.
 
@@ -12,17 +12,19 @@ The internal architecture follows SQLite’s design:
   <img src="https://cstack.github.io/db_tutorial/assets/images/arch2.gif"/>
 </p>
 
-The UI follows a more common MySQL-style interface.
+## Storage
+
+The marble storage backend is organized similarly to [InnoDB](https://dev.mysql.com/doc/refman/8.4/en/innodb-storage-engine.html). Each table has its own tablespace file (`.tbd`). The file contains a tablespace header and a set of fixed-size pages. Each page has its own header and a data section that stores actual rows. All pages are linked via previous/next relations, so the tablespace file represents a linked list of data pages.
 
 ## 📌 SQLite Clone - Progress Tracker
 
 First part is to imlement basic stuff using <https://cstack.github.io/db_tutorial>.
 
 - [x] **Part 1** - Introduction and Setting up the REPL
-- [ ] **Part 2** - World’s Simplest SQL Compiler and Virtual Machine
-- [ ] **Part 3** - An In-Memory, Append-Only, Single-Table Database
-- [ ] **Part 4** - Our First Tests (and Bugs)
-- [ ] **Part 5** - Persistence to Disk
+- [x] **Part 2** - World’s Simplest SQL Compiler and Virtual Machine
+- [x] **Part 3** - An In-Memory, Append-Only, Single-Table Database
+- [🤢] **Part 4** - Our First Tests (and Bugs)
+- [x] **Part 5** - Persistence to Disk
 - [ ] **Part 6** - The Cursor Abstraction
 - [ ] **Part 7** - Introduction to the B-Tree
 - [ ] **Part 8** - B-Tree Leaf Node Format
@@ -61,6 +63,14 @@ The os interface is the layer that differs depending on which operating system s
 
 ### SQL
 
+#### Statement structure
+
 <p align="center">
   <img src="https://upload.wikimedia.org/wikipedia/commons/a/aa/SQL_ANATOMY_wiki.svg"/>
+</p>
+
+#### Order of execution
+
+<p align="center">
+  <img src="https://media.geeksforgeeks.org/wp-content/uploads/20230426205000/order-of-execution-of-SQL-query.png"/>
 </p>
