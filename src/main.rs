@@ -1,7 +1,6 @@
 #![allow(warnings)]
 #![allow(dead_code)]
 mod command;
-mod console;
 mod database;
 mod errors;
 mod repl;
@@ -23,10 +22,17 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
     version = VERSION,
     about = "Tiny SQL database."
 )]
+
 struct Cli {
-    /// Execute a command.
-    #[arg(short, long)]
-    command: Option<String>,
+    /// The server host address to bind to. Defaults to 0.0.0.0, allowing connections from any interface.
+    #[arg(long, env = "MARBLE_HOST", default_value = "0.0.0.0")]
+    host: Option<String>,
+    /// The server port number to listen on. Defaults to 4012.
+    #[arg(long, env = "MARBLE_PORT", default_value = "4012")]
+    port: Option<u16>,
+    /// Start the database server as a standalone process.
+    #[arg(long, short, env = "MARBLE_SERVER", default_value = "false")]
+    server: bool,
 }
 
 fn main() {
@@ -45,24 +51,13 @@ fn main() {
         .init();
 
     let cli = Cli::parse();
-    if let Some(statement) = cli.command {
-        match sql::parse(statement) {
-            Ok(s) => {
-                let mut session = session::Session::open().unwrap();
-                command::execute(&mut session, s).unwrap();
-                session.close().unwrap();
-                echo!("\n");
-            }
-            Err(e) => {
-                echo!("\n");
-                error!("{}\n", e);
-            }
-        };
+    if cli.server {
+        println!("Server mode is not supported yet.");
         return;
     }
 
-    match repl::main() {
+    match repl::start() {
         Ok(_) => (),
-        Err(e) => echo!("Error: {}", e),
+        Err(e) => println!("Error: {}", e),
     }
 }

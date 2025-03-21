@@ -1,5 +1,5 @@
-use clap::builder::Str;
 use tracing_subscriber::registry::Data;
+use uuid::Uuid;
 
 use crate::{
     database::{self, Database},
@@ -7,12 +7,14 @@ use crate::{
 };
 
 pub struct Session {
+    pub id: Uuid,
     pub database: database::Database,
 }
 
 impl Session {
     pub fn open() -> Result<Self, errors::Error> {
         Ok(Session {
+            id: Uuid::new_v4(),
             database: Database::get_or_create(&"default".into())?,
         })
     }

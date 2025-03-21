@@ -1,9 +1,7 @@
+use crate::{errors, storage};
 use std::sync::{Arc, Mutex};
 use std::{collections::HashMap, path::PathBuf};
-
 use tracing::{debug, info, warn};
-
-use crate::{echo, errors, storage};
 
 pub struct Database {
     pub name: String,

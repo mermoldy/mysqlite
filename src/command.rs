@@ -1,4 +1,4 @@
-use crate::{console, database, echo, errors, schema, session, sql, storage};
+use crate::{database, errors, schema, session, sql, storage};
 use clap::builder::Str;
 use lazy_static::lazy_static;
 use regex::Regex;
@@ -7,16 +7,29 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use tracing::{info, trace};
 
+#[derive(Debug)]
+pub enum SqlResult {
+    /// OK response from INSERT/UPDATE/DELETE
+    Ok { affected_rows: u64 },
+    /// Result set from SELECT-like queries
+    ResultSet {
+        columns: Vec<String>,
+        rows: Vec<Vec<String>>,
+    },
+}
+
 /// Execute a statement.
-pub fn execute(session: &mut session::Session, c: sql::SqlCommand) -> Result<(), errors::Error> {
+pub fn execute(
+    session: &mut session::Session,
+    c: sql::SqlCommand,
+) -> Result<SqlResult, errors::Error> {
     match c.statement {
         sql::Statement::Select(s) => {
             let mut t = session.database.find_table(&s.table)?;
             match execute_select(t) {
                 Ok(rows) => {
                     if rows.len() == 0 {
-                        echo!("Empty set (0.00 sec)");
-                        return Ok(());
+                        return Ok(SqlResult::Ok { affected_rows: 0 });
                     }
 
                     let columns: Vec<String> = match s.columns {
@@ -37,10 +50,10 @@ pub fn execute(session: &mut session::Session, c: sql::SqlCommand) -> Result<(),
                         })
                         .collect();
 
-                    console::echo_lines(format!("{}", console::echo_table(&columns, &rows)));
-                    echo!("1 row in set (0.01 sec)")
+                    //  console::echo_lines(format!("{}", console::build_table(&columns, &rows)));
+                    Ok(SqlResult::Ok { affected_rows: 0 })
                 }
-                Err(e) => echo!("Error: {}", e),
+                Err(e) => Err(e),
             }
         }
         sql::Statement::Insert(i) => {
@@ -48,33 +61,30 @@ pub fn execute(session: &mut session::Session, c: sql::SqlCommand) -> Result<(),
 
             let row = schema::build_row(&storage::SCHEMA, &i.columns, &i.values)?;
 
-            match execute_insert(t, row) {
-                Ok(_) => {
-                    echo!("Query OK, 1 row affected (0.01 sec)");
-                }
-                Err(e) => echo!("Error: {}", e),
-            }
+            execute_insert(t, row)?;
+            Ok(SqlResult::Ok { affected_rows: 1 })
         }
-        sql::Statement::Update => echo!("This is where we would do an update."),
-        sql::Statement::Delete => echo!("This is where we would do a delete."),
+        sql::Statement::Update => Ok(SqlResult::Ok { affected_rows: 0 }),
+        sql::Statement::Delete => Ok(SqlResult::Ok { affected_rows: 0 }),
         sql::Statement::Create(s) => match s {
             sql::CreateStatement::CreateDatabaseStatement(s) => {
                 database::Database::create(&s.name)?;
-                echo!("Created database '{}'", &s.name);
+                Ok(SqlResult::Ok { affected_rows: 0 })
             }
             sql::CreateStatement::CreateTableStatement(s) => {
                 session.database.create_table(&s.name)?;
-                echo!("Query OK, 0 row affected (0.01 sec)");
+                Ok(SqlResult::Ok { affected_rows: 0 })
             }
         },
         sql::Statement::Show(s) => match s {
             sql::ShowStatement::ShowDatabasesStatement => {
-                let headers = Vec::from(["Database".into()]);
+                let headers: Vec<String> = Vec::from(["Database".into()]);
                 let rows: Vec<Vec<String>> = database::show_databases()?
                     .into_iter()
                     .map(|x| Vec::from([x]))
                     .collect();
-                console::echo_lines(format!("{}", console::echo_table(&headers, &rows)));
+                //  console::echo_lines(format!("{}", console::build_table(&headers, &rows)));
+                Ok(SqlResult::Ok { affected_rows: 0 })
             }
             sql::ShowStatement::ShowTablesStatement => {
                 let header = format!("Tables_in_{}", &session.database.name);
@@ -83,27 +93,27 @@ pub fn execute(session: &mut session::Session, c: sql::SqlCommand) -> Result<(),
                     .into_iter()
                     .map(|x| Vec::from([x]))
                     .collect();
-                console::echo_lines(format!("{}", console::echo_table(&headers, &rows)));
-                echo!("{} rows in set (0.00 sec)", rows.len())
+                // console::echo_lines(format!("{}", console::build_table(&headers, &rows)));
+                //  println!("{} rows in set (0.00 sec)", rows.len())
+                Ok(SqlResult::Ok { affected_rows: 0 })
             }
         },
         sql::Statement::Drop(d) => match d {
             sql::DropStatement::DropDatabasesStatement(name) => {
                 if name == session.database.name {
-                    echo!("Cannot drop the currently used database");
+                    //   println!("Cannot drop the currently used database");
                 } else {
                     database::drop_database(&name)?;
-                    echo!("Dropped '{}' database", name);
+                    //    println!("Dropped '{}' database", name);
                 }
+                Ok(SqlResult::Ok { affected_rows: 0 })
             }
             sql::DropStatement::DropTablesStatement(name) => {
                 session.database.drop_table(&name)?;
-                echo!("{} rows in set (0.00 sec)", 0);
+                Ok(SqlResult::Ok { affected_rows: 0 })
             }
         },
     }
-
-    Ok(())
 }
 
 pub fn execute_insert(
