@@ -173,6 +173,15 @@ impl Prompt {
                     (KeyCode::Backspace, _) => {
                         self.handle_backspace(buffer)?;
                     }
+                    (KeyCode::Char('b'), KeyModifiers::ALT) => {
+                        self.handle_word_left(&buffer)?;
+                    }
+                    (KeyCode::Char('f'), KeyModifiers::ALT) => {
+                        self.handle_word_right(&buffer)?;
+                    }
+                    (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
+                        self.handle_interrupt(buffer)?;
+                    }
                     (KeyCode::Left, _) if self.x > 0 => {
                         if x == 0 && self.x > 0 {
                             execute!(io::stdout(), cursor::MoveUp(1), cursor::MoveToColumn(width))?;
@@ -188,9 +197,6 @@ impl Prompt {
                             execute!(io::stdout(), cursor::MoveRight(1))?;
                         }
                         self.x += 1;
-                    }
-                    (KeyCode::Esc, _) | (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
-                        self.handle_interrupt(buffer)?;
                     }
                     (KeyCode::Char('d'), KeyModifiers::CONTROL) => {
                         super::console::echo_line("\nBye".into())?;
@@ -352,6 +358,93 @@ impl Prompt {
             write!(io::stdout(), "{}", &buffer.current()[self.x as usize..])?;
             io::stdout().flush()?;
             execute!(io::stdout(), cursor::MoveTo(x - 1, y))?;
+        }
+        Ok(())
+    }
+
+    /// Handles Option+Left (Alt+B) word navigation
+    fn handle_word_left(&mut self, buffer: &super::buffer::Buffer) -> io::Result<()> {
+        if self.x > 0 {
+            let current = buffer.current();
+            let chars: Vec<char> = current.chars().collect();
+            let mut new_x = self.x as usize;
+            let (x, y) = cursor::position()?;
+            let (width, height) = terminal::size()?;
+            let prompt_offset = (NAME.len() + 2) as u16;
+
+            // Skip trailing delimiters
+            while new_x > 0
+                && (chars[new_x - 1].is_whitespace()
+                    || chars[new_x - 1] == '('
+                    || chars[new_x - 1] == ')')
+            {
+                new_x -= 1;
+            }
+            // Find start of previous word
+            while new_x > 0
+                && !(chars[new_x - 1].is_whitespace()
+                    || chars[new_x - 1] == '('
+                    || chars[new_x - 1] == ')')
+            {
+                new_x -= 1;
+            }
+
+            let moves = self.x - new_x as u16;
+            self.x = new_x as u16;
+
+            let abs_pos = prompt_offset + self.x;
+            let new_col = abs_pos % width;
+
+            if moves > x {
+                let lines_up = (moves - x + width - 1) / width;
+                execute!(
+                    io::stdout(),
+                    cursor::MoveTo(new_col, y.saturating_sub(lines_up))
+                )?;
+            } else {
+                execute!(io::stdout(), cursor::MoveLeft(moves))?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Handles Option+Right (Alt+F) word navigation
+    fn handle_word_right(&mut self, buffer: &super::buffer::Buffer) -> io::Result<()> {
+        if self.x < buffer.len() as u16 {
+            let current = buffer.current();
+            let chars: Vec<char> = current.chars().collect();
+            let len = chars.len();
+            let mut new_x = self.x as usize;
+            let (x, y) = cursor::position()?;
+            let (width, height) = terminal::size()?;
+            let prompt_offset = (NAME.len() + 2) as u16;
+
+            // Skip current word
+            while new_x < len
+                && !(chars[new_x].is_whitespace() || chars[new_x] == '(' || chars[new_x] == ')')
+            {
+                new_x += 1;
+            }
+            // Skip following delimiters
+            while new_x < len
+                && (chars[new_x].is_whitespace() || chars[new_x] == '(' || chars[new_x] == ')')
+            {
+                new_x += 1;
+            }
+
+            let moves = (new_x as u16) - self.x;
+            self.x = new_x as u16;
+
+            let abs_pos = prompt_offset + self.x;
+            let new_col = abs_pos % width;
+
+            if x + moves >= width {
+                let lines_down = (x + moves) / width;
+                execute!(io::stdout(), cursor::MoveTo(new_col, y + lines_down))?;
+                self.y = self.y.saturating_add(lines_down);
+            } else {
+                execute!(io::stdout(), cursor::MoveRight(moves))?;
+            }
         }
         Ok(())
     }
