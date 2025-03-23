@@ -18,6 +18,13 @@ impl Session {
         })
     }
 
+    pub fn open_test() -> Result<Self, errors::Error> {
+        Ok(Session {
+            id: Uuid::new_v4(),
+            database: Database::get_or_create(&format!("test_{}", Uuid::new_v4().to_string()))?,
+        })
+    }
+
     pub fn close(&mut self) -> Result<(), errors::Error> {
         self.database.flush()?;
         Ok(())

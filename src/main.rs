@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 mod command;
 mod database;
+#[macro_use]
 mod errors;
 mod repl;
 mod schema;
@@ -9,6 +10,7 @@ mod sql;
 mod storage;
 use clap::Parser;
 use std::fs::OpenOptions;
+use std::io;
 use tracing_subscriber::EnvFilter;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -55,6 +57,7 @@ fn main() {
 
     match repl::console::start() {
         Ok(_) => (),
-        Err(e) => println!("Error: {}", e),
+        Err(errors::Error::Io(e)) if e.kind() == io::ErrorKind::Interrupted => (), // Silence Ctrl+C
+        Err(e) => println!("\nError: {}", e),
     }
 }

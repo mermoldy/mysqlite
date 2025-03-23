@@ -10,11 +10,6 @@ use std::path::PathBuf;
 ///
 /// # Panics
 /// Panics if the home directory cannot be determined.
-///
-/// # Examples
-/// ```
-/// let path = get_home_file(".myapp_history".to_string());
-/// ```
 pub fn get_home_file(filename: String) -> PathBuf {
     dirs::home_dir()
         .expect("Failed to get home directory")
@@ -49,12 +44,6 @@ pub fn append_history(line: &str, path: &PathBuf) -> io::Result<()> {
 /// # Returns
 /// A vector of strings containing the history lines. Returns an empty vector if the file
 /// cannot be opened or read.
-///
-/// # Examples
-/// ```
-/// let history_path = get_home_file(".myapp_history".to_string());
-/// let history = load_history(&history_path);
-/// ```
 pub fn load_history(path: &PathBuf) -> Vec<String> {
     let file = match File::open(path) {
         Ok(file) => file,

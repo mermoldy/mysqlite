@@ -43,7 +43,7 @@ impl Prompt {
     ///
     /// # Arguments
     /// * `line` - The command string to append to history
-    pub fn append_line(&mut self, line: &String) {
+    pub fn append_line(&mut self, line: &str) {
         if !line.trim().is_empty() {
             self.history.push(line.to_string());
             self.history_index = self.history.len();
@@ -59,7 +59,7 @@ impl Prompt {
     /// `io::Result<()>` indicating success or failure of the terminal operation
     pub fn start_prompt(&mut self) -> io::Result<()> {
         self.y = 0;
-        self.prompt_y = super::console::scroll_maybe(2)?;
+        self.prompt_y = super::console::scroll_maybe(1)?;
         self.render_prompt(format!("{}> ", NAME))?;
         Ok(())
     }
@@ -71,10 +71,6 @@ impl Prompt {
     pub fn clear_prompt(&mut self) -> io::Result<()> {
         self.y = 0;
         self.render_prompt(format!("{}> ", NAME))?;
-        execute!(
-            io::stdout(),
-            terminal::Clear(terminal::ClearType::FromCursorDown)
-        )?;
         Ok(())
     }
 
@@ -83,8 +79,8 @@ impl Prompt {
     /// # Returns
     /// `io::Result<()>` indicating success or failure of the terminal operation
     pub fn continue_prompt(&mut self) -> io::Result<()> {
-        self.prompt_y = super::console::scroll_maybe(2)?;
-        self.render_prompt(format!("\n{}-> ", " ".repeat(NAME.len() - 1)))?;
+        self.prompt_y = super::console::scroll_maybe(2)? + 1;
+        self.render_prompt(format!("{}-> ", " ".repeat(NAME.len() - 1)))?;
         Ok(())
     }
 
@@ -186,7 +182,7 @@ impl Prompt {
                         self.handle_interrupt(buffer)?;
                     }
                     (KeyCode::Char('d'), KeyModifiers::CONTROL) => {
-                        super::console::echo("Bye".into());
+                        super::console::echo_line("\nBye".into())?;
                         return Err(io::Error::new(io::ErrorKind::Interrupted, "Ctrl-D"));
                     }
                     (KeyCode::Char('l'), KeyModifiers::CONTROL) => {
@@ -247,7 +243,7 @@ impl Prompt {
             buffer.clear();
             self.clear_prompt()?;
         } else {
-            super::console::echo("Bye".into());
+            super::console::echo_line("\nBye".into())?;
             return Err(io::Error::new(io::ErrorKind::Interrupted, "Ctrl-C"));
         }
         Ok(())
