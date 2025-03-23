@@ -152,9 +152,6 @@ impl Prompt {
         ];
 
         loop {
-            let (x, _) = cursor::position()?;
-            let (width, _) = terminal::size()?;
-
             match event::read()? {
                 event::Event::Key(KeyEvent {
                     code, modifiers, ..
@@ -183,20 +180,10 @@ impl Prompt {
                         self.handle_interrupt(buffer)?;
                     }
                     (KeyCode::Left, _) if self.x > 0 => {
-                        if x == 0 && self.x > 0 {
-                            execute!(io::stdout(), cursor::MoveUp(1), cursor::MoveToColumn(width))?;
-                        } else {
-                            execute!(io::stdout(), cursor::MoveLeft(1))?;
-                        }
-                        self.x -= 1;
+                        self.handle_right()?;
                     }
                     (KeyCode::Right, _) if self.x < buffer.len() as u16 => {
-                        if x + 1 >= width {
-                            execute!(io::stdout(), cursor::MoveDown(1), cursor::MoveToColumn(0))?;
-                        } else {
-                            execute!(io::stdout(), cursor::MoveRight(1))?;
-                        }
-                        self.x += 1;
+                        self.handle_left()?;
                     }
                     (KeyCode::Char('d'), KeyModifiers::CONTROL) => {
                         super::console::echo_line("\nBye".into())?;
@@ -369,7 +356,7 @@ impl Prompt {
             let chars: Vec<char> = current.chars().collect();
             let mut new_x = self.x as usize;
             let (x, y) = cursor::position()?;
-            let (width, height) = terminal::size()?;
+            let (width, _) = terminal::size()?;
             let prompt_offset = (NAME.len() + 2) as u16;
 
             // Skip trailing delimiters
@@ -408,6 +395,33 @@ impl Prompt {
         Ok(())
     }
 
+    /// Handles right navigation.
+    fn handle_right(&mut self) -> io::Result<()> {
+        let (x, _) = cursor::position()?;
+        let (width, _) = terminal::size()?;
+
+        if x == 0 && self.x > 0 {
+            execute!(io::stdout(), cursor::MoveUp(1), cursor::MoveToColumn(width))?;
+        } else {
+            execute!(io::stdout(), cursor::MoveLeft(1))?;
+        }
+        self.x -= 1;
+        Ok(())
+    }
+
+    /// Handles left navigation.
+    fn handle_left(&mut self) -> io::Result<()> {
+        let (x, _) = cursor::position()?;
+        let (width, _) = terminal::size()?;
+
+        if x + 1 >= width {
+            execute!(io::stdout(), cursor::MoveDown(1), cursor::MoveToColumn(0))?;
+        } else {
+            execute!(io::stdout(), cursor::MoveRight(1))?;
+        }
+        self.x += 1;
+        Ok(())
+    }
     /// Handles Option+Right (Alt+F) word navigation
     fn handle_word_right(&mut self, buffer: &super::buffer::Buffer) -> io::Result<()> {
         if self.x < buffer.len() as u16 {
@@ -416,7 +430,7 @@ impl Prompt {
             let len = chars.len();
             let mut new_x = self.x as usize;
             let (x, y) = cursor::position()?;
-            let (width, height) = terminal::size()?;
+            let (width, _) = terminal::size()?;
             let prompt_offset = (NAME.len() + 2) as u16;
 
             // Skip current word
