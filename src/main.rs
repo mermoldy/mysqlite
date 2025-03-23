@@ -1,4 +1,3 @@
-#![allow(warnings)]
 #![allow(dead_code)]
 mod command;
 mod database;
@@ -9,10 +8,8 @@ mod session;
 mod sql;
 mod storage;
 use clap::Parser;
-use std::fs::File;
 use std::fs::OpenOptions;
-use tracing::info;
-use tracing_subscriber::{fmt, EnvFilter};
+use tracing_subscriber::EnvFilter;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -56,7 +53,7 @@ fn main() {
         return;
     }
 
-    match repl::start() {
+    match repl::console::start() {
         Ok(_) => (),
         Err(e) => println!("Error: {}", e),
     }

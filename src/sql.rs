@@ -1,9 +1,7 @@
 use crate::errors;
 use lazy_static::lazy_static;
 use regex::Regex;
-use std::any;
 use std::collections::VecDeque;
-use tracing::{info, trace};
 
 lazy_static! {
     static ref COLUMN_REGEX: Regex = Regex::new(r#"[A-Za-z_][A-Za-z0-9_]*"#).unwrap();
@@ -302,7 +300,7 @@ pub fn parse_select(sql: &mut VecDeque<String>) -> Result<SelectStatement, error
         columns_sql.push_str(s.as_str());
     }
 
-    if (columns_sql.starts_with("(") & columns_sql.ends_with(")")) {
+    if columns_sql.starts_with("(") & columns_sql.ends_with(")") {
         columns_sql = columns_sql[1..columns_sql.len() - 1].to_string();
     }
     columns_sql = columns_sql.replace(" ", "");

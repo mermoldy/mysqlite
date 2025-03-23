@@ -1,14 +1,11 @@
 use super::schema::{self, TableSchema};
-use crate::{database, errors};
+use crate::errors;
 use bincode::{config, Decode, Encode};
-use clap::error;
 use heapless::Vec;
 use once_cell::sync::Lazy;
 use std;
-use std::collections::HashMap;
 use std::fs::File;
-use std::io::{Cursor, Read, Write};
-use std::mem;
+use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tracing::info;
@@ -136,7 +133,7 @@ impl Table {
                 None => return Err(errors::Error::Db(format!("Memory page {} not found.", i))),
             };
 
-            let mut page_lock = page.lock().unwrap();
+            let page_lock = page.lock().unwrap();
             let page_header: [u8; PAGE_HEADER_SIZE] = encode_header(&PageHeader {
                 page_n_recs: 0,
                 page_n_heap: 0,
@@ -167,9 +164,9 @@ pub fn insert_row(table: &mut Table, row: &[u8]) -> Result<(), errors::Error> {
         )));
     }
 
-    /// Rows should not cross page boundaries. Since pages probably won’t
-    /// exist next to each other in memory, this assumption makes it
-    /// easier to read/write rows.
+    // Rows should not cross page boundaries. Since pages probably won’t
+    // exist next to each other in memory, this assumption makes it
+    // easier to read/write rows.
     let rows_per_page = PAGE_SIZE as u32 / table.schema.row_size;
     let max_rows = rows_per_page * TABLE_MAX_PAGES as u32;
 
@@ -188,7 +185,7 @@ pub fn insert_row(table: &mut Table, row: &[u8]) -> Result<(), errors::Error> {
         if let Err(e) = table.pages.push(Arc::new(p.into())) {}
     }
 
-    let mut page = match table.pages.get(page_num as usize) {
+    let page = match table.pages.get(page_num as usize) {
         Some(p) => p,
         None => {
             return Err(errors::Error::Db(
@@ -232,7 +229,7 @@ pub fn select_rows(table: &Table) -> Result<std::vec::Vec<schema::Row>, errors::
             }
         };
 
-        let mut page_lock = page.lock().unwrap();
+        let page_lock = page.lock().unwrap();
         let row = schema::deserialize_row(
             &SCHEMA,
             &page_lock[byte_offset..byte_offset + table.schema.row_size as usize],
@@ -269,7 +266,7 @@ pub fn load(database: &String, name: &String) -> Result<Table, errors::Error> {
         pages.push(Arc::new(Mutex::new(page_buf)));
     }
 
-    let mut table = Table {
+    let table = Table {
         name: name.clone(),
         path: path,
         database: database.clone(),
@@ -281,8 +278,8 @@ pub fn load(database: &String, name: &String) -> Result<Table, errors::Error> {
 }
 
 pub fn create(database: &String, name: &String) -> Result<Table, errors::Error> {
-    let mut pages: Vec<Arc<Mutex<[u8; PAGE_SIZE]>>, TABLE_MAX_PAGES> = Vec::new();
-    let mut num_rows = 0;
+    let pages: Vec<Arc<Mutex<[u8; PAGE_SIZE]>>, TABLE_MAX_PAGES> = Vec::new();
+    let num_rows = 0;
 
     let path = PathBuf::from(format!("data/{}/{}.tbd", database, name));
     if path.exists() {
@@ -293,7 +290,7 @@ pub fn create(database: &String, name: &String) -> Result<Table, errors::Error> 
     }
     File::create(&path)?;
 
-    let mut table = Table {
+    let table = Table {
         name: name.clone(),
         database: database.clone(),
         path: path,
@@ -305,8 +302,8 @@ pub fn create(database: &String, name: &String) -> Result<Table, errors::Error> 
 }
 
 pub fn drop(database: &String, name: &String) -> Result<(), errors::Error> {
-    let mut pages: Vec<Arc<Mutex<[u8; PAGE_SIZE]>>, TABLE_MAX_PAGES> = Vec::new();
-    let mut num_rows = 0;
+    let pages: Vec<Arc<Mutex<[u8; PAGE_SIZE]>>, TABLE_MAX_PAGES> = Vec::new();
+    let num_rows = 0;
 
     let path = PathBuf::from(format!("data/{}/{}.tbd", database, name));
     if !path.exists() {

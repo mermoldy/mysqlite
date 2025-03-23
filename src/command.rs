@@ -1,11 +1,5 @@
 use crate::{database, errors, schema, session, sql, storage};
-use clap::builder::Str;
-use lazy_static::lazy_static;
-use regex::Regex;
-use std::any;
-use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
-use tracing::{info, trace};
 
 #[derive(Debug)]
 pub enum SqlResult {
@@ -25,7 +19,7 @@ pub fn execute(
 ) -> Result<SqlResult, errors::Error> {
     match c.statement {
         sql::Statement::Select(s) => {
-            let mut t = session.database.find_table(&s.table)?;
+            let t = session.database.find_table(&s.table)?;
             match execute_select(t) {
                 Ok(rows) => {
                     if rows.len() == 0 {
@@ -57,7 +51,7 @@ pub fn execute(
             }
         }
         sql::Statement::Insert(i) => {
-            let mut t = session.database.find_table(&i.table)?;
+            let t = session.database.find_table(&i.table)?;
 
             let row = schema::build_row(&storage::SCHEMA, &i.columns, &i.values)?;
 

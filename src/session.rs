@@ -1,4 +1,3 @@
-use tracing_subscriber::registry::Data;
 use uuid::Uuid;
 
 use crate::{
