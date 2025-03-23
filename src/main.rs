@@ -1,10 +1,9 @@
 #![allow(dead_code)]
-mod command;
-mod database;
 #[macro_use]
 mod errors;
+mod command;
+mod database;
 mod repl;
-mod schema;
 mod session;
 mod sql;
 mod storage;

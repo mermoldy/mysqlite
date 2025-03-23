@@ -66,7 +66,15 @@ impl Buffer {
 
     /// Combines all lines into a single String with spaces between lines.
     pub fn build(&self) -> String {
-        self.lines.join(" ").trim().to_string()
+        self.lines
+            .as_slice()
+            .iter()
+            .filter(|line| !line.trim().is_empty())
+            .map(AsRef::as_ref)
+            .collect::<Vec<&str>>()
+            .join(" ")
+            .trim()
+            .to_string()
     }
 
     /// Returns the length of the current (last) line.

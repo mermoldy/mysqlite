@@ -195,7 +195,7 @@ impl<'a> Console<'a> {
                             command::SqlResult::Ok { affected_rows } => {
                                 next_line()?;
                                 echo_line(format!(
-                                    "Query OK, {} row{} affected ({:.2} sec)\n",
+                                    "Query OK, {} row{} affected ({:.2} sec)",
                                     affected_rows,
                                     if affected_rows == 1 { "" } else { "s" },
                                     elapsed
@@ -205,7 +205,7 @@ impl<'a> Console<'a> {
                                 next_line()?;
                                 echo_lines(build_table(&columns, &rows))?;
                                 echo_line(format!(
-                                    "{} row{} in set ({:.2} sec)\n",
+                                    "{} row{} in set ({:.2} sec)",
                                     rows.len(),
                                     if rows.len() == 1 { "" } else { "s" },
                                     elapsed

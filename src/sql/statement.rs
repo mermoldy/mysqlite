@@ -1,3 +1,5 @@
+use crate::storage::schema::DataType;
+
 /// Represents an SQL command with its parsed statement and original SQL string.
 #[derive(Debug)]
 pub struct SqlCommand {
@@ -36,6 +38,7 @@ pub enum Statement {
     Create(CreateStatement),
     Drop(DropStatement),
     Show(ShowStatement),
+    Describe(DescribeStatement),
 }
 
 /// SQL clauses (currently unused but included for future expansion).
@@ -80,20 +83,10 @@ pub struct CreateTableStatement {
     pub columns_schemas: Vec<ColumnSchema>,
 }
 
-/// Supported SQL column data types.
+/// Represents a `DESCRIBE` table statement with table name.
 #[derive(Debug)]
-pub enum ColumnType {
-    Int,          // i64, equivalent to SQL's BIGINT
-    SmallInt,     // i16
-    TinyInt,      // i8
-    BigInt,       // i128
-    Float,        // 32-bit floating point
-    Double,       // 64-bit floating point
-    VarChar(u16), // Variable-length string with max length
-    Text,         // Unbounded string
-    DateTime,     // Date and time combined
-    Timestamp,    // Date and time with timezone information
-    Boolean,      // True/False value
+pub struct DescribeStatement {
+    pub name: String,
 }
 
 /// Represents a column schema in a `CREATE TABLE` statement.
@@ -101,7 +94,7 @@ pub enum ColumnType {
 pub struct ColumnSchema {
     pub name: String,
     pub is_primary: bool,
-    pub type_: ColumnType,
+    pub type_: DataType,
     pub default: Option<String>,
 }
 

@@ -1,4 +1,4 @@
-use crate::{database, errors, schema, session, sql, storage};
+use crate::{database, errors, session, sql, storage};
 use std::sync::{Arc, Mutex};
 
 /// Result of executing an SQL statement.
@@ -46,6 +46,9 @@ pub fn execute(
         sql::Statement::Create(create_stmt) => execute_create_statement(session, create_stmt),
         sql::Statement::Show(show_stmt) => execute_show_statement(session, show_stmt),
         sql::Statement::Drop(drop_stmt) => execute_drop_statement(session, drop_stmt),
+        sql::Statement::Describe(describe_stmt) => {
+            execute_describe_statement(session, describe_stmt)
+        }
     }
 }
 
@@ -99,6 +102,51 @@ fn execute_select_statement(
     })
 }
 
+/// Executes a `DESCRIBE` statement.
+///
+/// # Arguments
+/// * `session` - The session context.
+/// * `stmt` - The `DescribeStatement` to execute.
+///
+/// # Returns
+/// A `Result` containing a `SqlResult::ResultSet` with query results or an `errors::Error`.
+fn execute_describe_statement(
+    session: &mut session::Session,
+    stmt: sql::DescribeStatement,
+) -> Result<SqlResult, errors::Error> {
+    let _ = session.database.find_table(&stmt.name)?;
+
+    let columns: Vec<String> = Vec::from([
+        "Field".into(),
+        "Type".into(),
+        "Null".into(),
+        "Key".into(),
+        "Default".into(),
+        "Extra".into(),
+    ]);
+
+    let rows: Vec<Vec<String>> = storage::engine::SCHEMA
+        .columns
+        .clone()
+        .into_iter()
+        .map(|c| {
+            Vec::from([
+                c.name.clone(),
+                c.data_type.clone().to_string(),
+                c.nullable.then(|| "YES").unwrap_or("NO").to_string(),
+                c.primary.then(|| "PRI").unwrap_or("-").to_string(),
+                c.default.clone().unwrap_or("NULL".to_string()),
+                "".into(),
+            ])
+        })
+        .collect();
+
+    Ok(SqlResult::ResultSet {
+        columns,
+        rows: rows,
+    })
+}
+
 /// Executes an `INSERT` statement.
 ///
 /// # Arguments
@@ -112,7 +160,7 @@ fn execute_insert_statement(
     stmt: sql::InsertStatement,
 ) -> Result<SqlResult, errors::Error> {
     let table = session.database.find_table(&stmt.table)?;
-    let row = schema::build_row(&storage::SCHEMA, &stmt.columns, &stmt.values)?;
+    let row = storage::schema::build_row(&storage::engine::SCHEMA, &stmt.columns, &stmt.values)?;
     execute_insert(table, row)?;
     Ok(SqlResult::Ok { affected_rows: 1 })
 }
@@ -206,7 +254,7 @@ fn execute_show_statement(
         }
         sql::ShowStatement::ShowTablesStatement => {
             let columns = vec![format!("Tables_in_{}", &session.database.name)];
-            let rows = storage::show_tables(&session.database.name)?
+            let rows = storage::engine::show_tables(&session.database.name)?
                 .into_iter()
                 .map(|table| vec![table])
                 .collect();
@@ -253,14 +301,14 @@ fn execute_drop_statement(
 /// # Returns
 /// A `Result` indicating success or an `errors::Error` if the operation fails.
 pub fn execute_insert(
-    table: &Arc<Mutex<storage::Table>>,
-    row: schema::Row,
+    table: &Arc<Mutex<storage::engine::Table>>,
+    row: storage::schema::Row,
 ) -> Result<(), errors::Error> {
     let mut locked_table = table
         .lock()
         .map_err(|_| errors::Error::LockTable("Failed to lock table for insert".to_string()))?;
-    let bin_row = schema::serialize_row(&storage::SCHEMA, row)?;
-    storage::insert_row(&mut locked_table, &bin_row)?;
+    let bin_row = storage::schema::serialize_row(&storage::engine::SCHEMA, row)?;
+    storage::engine::insert_row(&mut locked_table, &bin_row)?;
     Ok(())
 }
 
@@ -272,12 +320,12 @@ pub fn execute_insert(
 /// # Returns
 /// A `Result` containing a vector of `schema::Row`s or an `errors::Error`.
 pub fn execute_select(
-    table: &Arc<Mutex<storage::Table>>,
-) -> Result<Vec<schema::Row>, errors::Error> {
+    table: &Arc<Mutex<storage::engine::Table>>,
+) -> Result<Vec<storage::schema::Row>, errors::Error> {
     let locked_table = table
         .lock()
         .map_err(|_| errors::Error::LockTable("Failed to lock table for select".to_string()))?;
-    storage::select_rows(&locked_table)
+    storage::engine::select_rows(&locked_table)
 }
 
 #[cfg(test)]

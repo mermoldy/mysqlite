@@ -152,6 +152,9 @@ impl Prompt {
         ];
 
         loop {
+            let (x, _) = cursor::position()?;
+            let (width, _) = terminal::size()?;
+
             match event::read()? {
                 event::Event::Key(KeyEvent {
                     code, modifiers, ..
@@ -171,12 +174,20 @@ impl Prompt {
                         self.handle_backspace(buffer)?;
                     }
                     (KeyCode::Left, _) if self.x > 0 => {
+                        if x == 0 && self.x > 0 {
+                            execute!(io::stdout(), cursor::MoveUp(1), cursor::MoveToColumn(width))?;
+                        } else {
+                            execute!(io::stdout(), cursor::MoveLeft(1))?;
+                        }
                         self.x -= 1;
-                        execute!(io::stdout(), cursor::MoveLeft(1))?;
                     }
                     (KeyCode::Right, _) if self.x < buffer.len() as u16 => {
+                        if x + 1 >= width {
+                            execute!(io::stdout(), cursor::MoveDown(1), cursor::MoveToColumn(0))?;
+                        } else {
+                            execute!(io::stdout(), cursor::MoveRight(1))?;
+                        }
                         self.x += 1;
-                        execute!(io::stdout(), cursor::MoveRight(1))?;
                     }
                     (KeyCode::Esc, _) | (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
                         self.handle_interrupt(buffer)?;
@@ -319,16 +330,28 @@ impl Prompt {
             buffer.remove(self.x as usize - 1);
             self.x -= 1;
 
-            let (x, _) = cursor::position()?;
-            execute!(
-                io::stdout(),
-                cursor::MoveToColumn(x - 1),
-                terminal::Clear(terminal::ClearType::UntilNewLine)
-            )?;
+            let (width, _) = terminal::size()?;
+            let (mut x, mut y) = cursor::position()?;
+
+            if x == 0 && self.x > 0 {
+                execute!(
+                    io::stdout(),
+                    cursor::MoveUp(1),
+                    cursor::MoveToColumn(width),
+                    terminal::Clear(terminal::ClearType::FromCursorDown)
+                )?;
+                (x, y) = cursor::position()?;
+            } else {
+                execute!(
+                    io::stdout(),
+                    cursor::MoveLeft(1),
+                    terminal::Clear(terminal::ClearType::FromCursorDown)
+                )?;
+            }
+
             write!(io::stdout(), "{}", &buffer.current()[self.x as usize..])?;
             io::stdout().flush()?;
-
-            execute!(io::stdout(), cursor::MoveToColumn(x - 1),)?;
+            execute!(io::stdout(), cursor::MoveTo(x - 1, y))?;
         }
         Ok(())
     }
@@ -338,15 +361,15 @@ impl Prompt {
     /// # Arguments
     /// * `buffer` - The input buffer to redraw
     fn redraw_from_cursor(&mut self, buffer: &mut super::buffer::Buffer) -> io::Result<()> {
-        let (x, _) = cursor::position()?;
+        let (x, y) = cursor::position()?;
         execute!(
             io::stdout(),
             cursor::MoveToColumn(x),
-            terminal::Clear(terminal::ClearType::UntilNewLine)
+            terminal::Clear(terminal::ClearType::FromCursorDown)
         )?;
         write!(io::stdout(), "{}", &buffer.current()[self.x as usize..])?;
         io::stdout().flush()?;
-        execute!(io::stdout(), cursor::MoveToColumn(x + 1))?;
+        execute!(io::stdout(), cursor::MoveTo(x + 1, y))?;
         Ok(())
     }
 }

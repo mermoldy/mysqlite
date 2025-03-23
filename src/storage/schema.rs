@@ -2,6 +2,7 @@ use crate::errors;
 use bincode;
 use bincode::{config, Decode, Encode};
 use std::collections::HashMap;
+use std::fmt;
 use std::usize;
 
 #[derive(Debug, Clone)]
@@ -17,6 +18,24 @@ pub enum DataType {
     DATETIME,     // Date and time combined
     TIMESTAMP,    // Date and time with timezone information
     BOOLEAN,      // True/False value
+}
+
+impl fmt::Display for DataType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DataType::INT => write!(f, "INT"),
+            DataType::SMALLINT => write!(f, "SMALLINT"),
+            DataType::TINYINT => write!(f, "TINYINT"),
+            DataType::BIGINT => write!(f, "BIGINT"),
+            DataType::FLOAT => write!(f, "FLOAT"),
+            DataType::DOUBLE => write!(f, "DOUBLE"),
+            DataType::VARCHAR(max_length) => write!(f, "VARCHAR({})", max_length),
+            DataType::TEXT => write!(f, "TEXT"),
+            DataType::DATETIME => write!(f, "DATETIME"),
+            DataType::TIMESTAMP => write!(f, "TIMESTAMP"),
+            DataType::BOOLEAN => write!(f, "BOOLEAN"),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

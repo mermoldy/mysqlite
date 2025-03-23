@@ -2,12 +2,13 @@ use super::statement::*;
 use super::tokenizer;
 use super::validator;
 use crate::errors;
+use crate::storage::schema::DataType;
 use std::collections::VecDeque;
 
 /// Parses an `INSERT` statement from tokenized SQL.
 ///
 /// # Arguments
-/// * `sql` - A mutable `VecDeque<String>` of SQL tokens.
+/// * `tokens` - A mutable `VecDeque<String>` of SQL tokens.
 ///
 /// # Returns
 /// A `Result` containing the parsed `InsertStatement` or an `errors::Error`.
@@ -29,7 +30,7 @@ fn parse_insert(sql: &mut VecDeque<String>) -> Result<InsertStatement, errors::E
 /// Parses a `SELECT` statement from tokenized SQL.
 ///
 /// # Arguments
-/// * `sql` - A mutable `VecDeque<String>` of SQL tokens.
+/// * `tokens` - A mutable `VecDeque<String>` of SQL tokens.
 ///
 /// # Returns
 /// A `Result` containing the parsed `SelectStatement` or an `errors::Error`.
@@ -55,7 +56,7 @@ fn parse_select(sql: &mut VecDeque<String>) -> Result<SelectStatement, errors::E
 /// Parses a `CREATE` statement from tokenized SQL.
 ///
 /// # Arguments
-/// * `sql` - A mutable `VecDeque<String>` of SQL tokens.
+/// * `tokens` - A mutable `VecDeque<String>` of SQL tokens.
 ///
 /// # Returns
 /// A `Result` containing the parsed `CreateStatement` or an `errors::Error`.
@@ -78,7 +79,7 @@ fn parse_create(sql: &mut VecDeque<String>) -> Result<CreateStatement, errors::E
 /// Parses a `SHOW` statement from tokenized SQL.
 ///
 /// # Arguments
-/// * `sql` - A mutable `VecDeque<String>` of SQL tokens.
+/// * `tokens` - A mutable `VecDeque<String>` of SQL tokens.
 ///
 /// # Returns
 /// A `Result` containing the parsed `ShowStatement` or an `errors::Error`.
@@ -94,10 +95,22 @@ fn parse_show(tokens: &mut VecDeque<String>) -> Result<ShowStatement, errors::Er
     }
 }
 
+/// Parses a `DESCRIBE` statement from tokenized SQL.
+///
+/// # Arguments
+/// * `tokens` - A mutable `VecDeque<String>` of SQL tokens.
+///
+/// # Returns
+/// A `Result` containing the parsed `ShowStatement` or an `errors::Error`.
+fn parse_describe(tokens: &mut VecDeque<String>) -> Result<DescribeStatement, errors::Error> {
+    let name = pop_token(tokens, "'DESCRIBE' must be followed by a table name.")?;
+    Ok(DescribeStatement { name })
+}
+
 /// Parses a `DROP` statement from tokenized SQL.
 ///
 /// # Arguments
-/// * `sql` - A mutable `VecDeque<String>` of SQL tokens.
+/// * `tokens` - A mutable `VecDeque<String>` of SQL tokens.
 ///
 /// # Returns
 /// A `Result` containing the parsed `DropStatement` or an `errors::Error`.
@@ -120,7 +133,7 @@ fn parse_drop(tokens: &mut VecDeque<String>) -> Result<DropStatement, errors::Er
 /// Parses a `DELETE` statement from tokenized SQL.
 ///
 /// # Arguments
-/// * `sql` - A mutable `VecDeque<String>` of SQL tokens.
+/// * `tokens` - A mutable `VecDeque<String>` of SQL tokens.
 ///
 /// # Returns
 /// A `Result` containing the parsed `DeleteStatement` or an `errors::Error`.
@@ -137,7 +150,7 @@ fn parse_delete(tokens: &mut VecDeque<String>) -> Result<DeleteStatement, errors
 /// Parses an `UPDATE` statement from tokenized SQL.
 ///
 /// # Arguments
-/// * `sql` - A mutable `VecDeque<String>` of SQL tokens.
+/// * `tokens` - A mutable `VecDeque<String>` of SQL tokens.
 ///
 /// # Returns
 /// A `Result` containing the parsed `UpdateStatement` or an `errors::Error`.
@@ -165,7 +178,7 @@ fn parse_update(tokens: &mut VecDeque<String>) -> Result<UpdateStatement, errors
 /// Parses a `CREATE DATABASE` statement.
 ///
 /// # Arguments
-/// * `sql` - A mutable `VecDeque<String>` of SQL tokens.
+/// * `tokens` - A mutable `VecDeque<String>` of SQL tokens.
 ///
 /// # Returns
 /// A `Result` containing the parsed `CreateDatabaseStatement` or an `errors::Error`.
@@ -182,7 +195,7 @@ fn parse_create_database(
 /// Parses a `CREATE TABLE` statement with column schemas.
 ///
 /// # Arguments
-/// * `sql` - A mutable `VecDeque<String>` of SQL tokens.
+/// * `tokens` - A mutable `VecDeque<String>` of SQL tokens.
 ///
 /// # Returns
 /// A `Result` containing the parsed `CreateTableStatement` or an `errors::Error`.
@@ -378,28 +391,28 @@ fn parse_column_schemas(columns_str: &str) -> Result<Vec<ColumnSchema>, errors::
 /// * `type_str` - The type string to parse.
 ///
 /// # Returns
-/// A `Result` containing the `ColumnType` or an `errors::Error`.
-fn parse_column_type(type_str: &str) -> Result<ColumnType, errors::Error> {
+/// A `Result` containing the `DataType` or an `errors::Error`.
+fn parse_column_type(type_str: &str) -> Result<DataType, errors::Error> {
     validator::validate_column_type(type_str)?;
     let upper = type_str.to_uppercase();
 
     match upper.as_str() {
-        "INT" => Ok(ColumnType::Int),
-        "SMALLINT" => Ok(ColumnType::SmallInt),
-        "TINYINT" => Ok(ColumnType::TinyInt),
-        "BIGINT" => Ok(ColumnType::BigInt),
-        "FLOAT" => Ok(ColumnType::Float),
-        "DOUBLE" => Ok(ColumnType::Double),
-        "TEXT" => Ok(ColumnType::Text),
-        "DATETIME" => Ok(ColumnType::DateTime),
-        "TIMESTAMP" => Ok(ColumnType::Timestamp),
-        "BOOLEAN" => Ok(ColumnType::Boolean),
+        "INT" => Ok(DataType::INT),
+        "SMALLINT" => Ok(DataType::SMALLINT),
+        "TINYINT" => Ok(DataType::TINYINT),
+        "BIGINT" => Ok(DataType::BIGINT),
+        "FLOAT" => Ok(DataType::FLOAT),
+        "DOUBLE" => Ok(DataType::DOUBLE),
+        "TEXT" => Ok(DataType::TEXT),
+        "DATETIME" => Ok(DataType::DATETIME),
+        "TIMESTAMP" => Ok(DataType::TIMESTAMP),
+        "BOOLEAN" => Ok(DataType::BOOLEAN),
         _ if upper.starts_with("VARCHAR(") && upper.ends_with(")") => {
             let len_str = &upper[8..upper.len() - 1];
             let len = len_str.parse::<u16>().map_err(|_| {
                 errors::Error::Syntax(format!("Invalid VARCHAR length: {}.", len_str))
             })?;
-            Ok(ColumnType::VarChar(len))
+            Ok(DataType::VARCHAR(len))
         }
         _ => Err(errors::Error::Syntax(format!(
             "Unsupported column type: {}.",
@@ -496,6 +509,7 @@ pub fn parse(raw_sql: String) -> Result<SqlCommand, errors::Error> {
         "CREATE" => Statement::Create(parse_create(&mut tokens)?),
         "DROP" => Statement::Drop(parse_drop(&mut tokens)?),
         "SHOW" => Statement::Show(parse_show(&mut tokens)?),
+        "DESCRIBE" => Statement::Describe(parse_describe(&mut tokens)?),
         _ => {
             return Err(errors::Error::Syntax(format!(
                 "Unrecognized statement: {}.",

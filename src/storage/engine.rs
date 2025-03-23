@@ -277,7 +277,7 @@ pub fn load(database: &String, name: &String) -> Result<Table, errors::Error> {
     Ok(table)
 }
 
-pub fn create(database: &String, name: &String) -> Result<Table, errors::Error> {
+pub fn create_table(database: &String, name: &String) -> Result<Table, errors::Error> {
     let pages: Vec<Arc<Mutex<[u8; PAGE_SIZE]>>, TABLE_MAX_PAGES> = Vec::new();
     let num_rows = 0;
 
@@ -301,10 +301,7 @@ pub fn create(database: &String, name: &String) -> Result<Table, errors::Error> 
     Ok(table)
 }
 
-pub fn drop(database: &String, name: &String) -> Result<(), errors::Error> {
-    let pages: Vec<Arc<Mutex<[u8; PAGE_SIZE]>>, TABLE_MAX_PAGES> = Vec::new();
-    let num_rows = 0;
-
+pub fn drop_table(database: &String, name: &String) -> Result<(), errors::Error> {
     let path = PathBuf::from(format!("data/{}/{}.tbd", database, name));
     if !path.exists() {
         return Err(errors::Error::Db(format!(
@@ -312,7 +309,7 @@ pub fn drop(database: &String, name: &String) -> Result<(), errors::Error> {
             &database, &name
         )));
     }
-    std::fs::remove_dir_all(&path)?;
+    std::fs::remove_file(&path)?;
     Ok(())
 }
 
