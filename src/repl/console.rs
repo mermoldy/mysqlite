@@ -157,18 +157,21 @@ impl<'a> Console<'a> {
         let dbname = dbname.trim_end_matches(|c: char| c == ';').to_string();
         let db = database::Database::get(&dbname)?;
         self.session.set_database(db)?;
-        echo_line("Database changed\n".to_string())?;
+        next_line()?;
+        echo_line("Database changed".to_string())?;
         Ok(false)
     }
 
     fn handle_version(&mut self, cmd: &str) -> Result<bool, errors::Error> {
         self.prompt.append_line(cmd);
-        echo_line(format!("{} version: {}\n", NAME, VERSION))?;
+        next_line()?;
+        echo_line(format!("{} version: {}", NAME, VERSION))?;
         Ok(false)
     }
 
     fn handle_help(&mut self, cmd: &str) -> Result<bool, errors::Error> {
         self.prompt.append_line(cmd);
+        next_line()?;
         echo_lines(HELP.to_string())?;
         Ok(false)
     }
@@ -176,7 +179,7 @@ impl<'a> Console<'a> {
     fn handle_command(&mut self, cmd: &str) -> Result<bool, errors::Error> {
         if cmd.starts_with('\\') {
             next_line()?;
-            echo_error(format!("Unrecognized command: {}\n", cmd))?;
+            echo_error(format!("Unrecognized command: {}", cmd))?;
             echo_lines(HELP.to_string())?;
             return Ok(false);
         }
@@ -197,19 +200,16 @@ impl<'a> Console<'a> {
                                     if affected_rows == 1 { "" } else { "s" },
                                     elapsed
                                 ))?;
-                                next_line()?;
                             }
                             command::SqlResult::ResultSet { columns, rows } => {
                                 next_line()?;
                                 echo_lines(build_table(&columns, &rows))?;
-                                next_line()?;
                                 echo_line(format!(
                                     "{} row{} in set ({:.2} sec)\n",
                                     rows.len(),
                                     if rows.len() == 1 { "" } else { "s" },
                                     elapsed
                                 ))?;
-                                next_line()?;
                             }
                         }
                     }
@@ -237,7 +237,8 @@ pub fn echo_line(s: String) -> io::Result<()> {
         io::stdout(),
         cursor::MoveToColumn(0),
         Print(format!("{:<width$}", s, width = width as usize)),
-        Print("\n")
+        //  terminal::Clear(terminal::ClearType::FromCursorDown),
+        Print("\n"),
     )?;
     io::stdout().flush()?;
     Ok(())

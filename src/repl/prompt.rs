@@ -109,7 +109,7 @@ impl Prompt {
             SetForegroundColor(Color::Green),
             style::Print(text),
             style::SetAttribute(style::Attribute::Reset),
-            terminal::Clear(terminal::ClearType::UntilNewLine)
+            terminal::Clear(terminal::ClearType::FromCursorDown)
         )
     }
 
