@@ -1,4 +1,4 @@
-use crate::storage::schema::DataType;
+use crate::storage::schema::ColumnSchema;
 
 /// Represents an SQL command with its parsed statement and original SQL string.
 #[derive(Debug)]
@@ -87,15 +87,6 @@ pub struct CreateTableStatement {
 #[derive(Debug)]
 pub struct DescribeStatement {
     pub name: String,
-}
-
-/// Represents a column schema in a `CREATE TABLE` statement.
-#[derive(Debug)]
-pub struct ColumnSchema {
-    pub name: String,
-    pub is_primary: bool,
-    pub type_: DataType,
-    pub default: Option<String>,
 }
 
 /// Represents a `DELETE` statement with table and optional WHERE clause.

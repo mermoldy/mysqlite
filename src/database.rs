@@ -1,4 +1,4 @@
-use crate::{errors::Error, storage::engine};
+use crate::{errors::Error, storage};
 use std::sync::{Arc, Mutex};
 use std::{collections::HashMap, path::PathBuf};
 use tracing::{info, warn};
@@ -6,7 +6,7 @@ use tracing::{info, warn};
 pub struct Database {
     pub name: String,
     path: PathBuf,
-    tables: HashMap<String, Arc<Mutex<engine::Table>>>,
+    tables: HashMap<String, Arc<Mutex<storage::Table>>>,
 }
 
 impl Database {
@@ -48,7 +48,7 @@ impl Database {
 
                 if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
                     let table_name = stem.to_string();
-                    let table = engine::load(&name, &table_name)?;
+                    let table = storage::table::load_table(&name, &table_name)?;
                     tables.insert(table_name, Arc::new(Mutex::new(table)));
                 }
             }
@@ -62,7 +62,7 @@ impl Database {
             return Err(err!(Db, "Table '{}.{}' already exists", self.name, name));
         }
 
-        let table = engine::create_table(&self.name, name)?;
+        let table = storage::table::create_table(&self.name, name)?;
         self.tables
             .insert(name.to_string(), Arc::new(Mutex::new(table)));
         Ok(())
@@ -72,11 +72,11 @@ impl Database {
         self.tables
             .remove(name)
             .ok_or_else(|| err!(Db, "Table '{}.{}' doesn't exist", self.name, name))?;
-        engine::drop_table(&self.name, name)?;
+        storage::table::drop_table(&self.name, name)?;
         Ok(())
     }
 
-    pub fn find_table(&self, name: &String) -> Result<&Arc<Mutex<engine::Table>>, Error> {
+    pub fn find_table(&self, name: &String) -> Result<&Arc<Mutex<storage::Table>>, Error> {
         self.tables
             .get(name)
             .ok_or_else(|| err!(Db, "Table '{}.{}' doesn't exist", self.name, name))

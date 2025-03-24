@@ -23,7 +23,7 @@ pub enum Error {
     Schema(String),
     /// Row serialization/deserialization error.
     /// Error code: 6000
-    Serialization(String),
+    Encoding(String),
     /// Invalid operation (e.g., dropping current database).
     /// Error code: 7000
     InvalidOperation(String),
@@ -47,7 +47,7 @@ impl Error {
             Error::Syntax(_) => 3000,
             Error::LockTable(_) => 4000,
             Error::Schema(_) => 5000,
-            Error::Serialization(_) => 6000,
+            Error::Encoding(_) => 6000,
             Error::InvalidOperation(_) => 7000,
             Error::Other(_) => 9000,
         }
@@ -67,7 +67,7 @@ impl Error {
             Error::Syntax(_) => "Syntax",
             Error::LockTable(_) => "Table Lock",
             Error::Schema(_) => "Schema",
-            Error::Serialization(_) => "Serialization",
+            Error::Encoding(_) => "Encoding",
             Error::InvalidOperation(_) => "Invalid Operation",
             Error::Other(_) => "Other",
         }
@@ -82,8 +82,8 @@ impl fmt::Display for Error {
             Error::Syntax(msg) => write!(f, "[{}] Syntax Error: {}", self.code(), msg),
             Error::LockTable(msg) => write!(f, "[{}] Lock Table Error: {}", self.code(), msg),
             Error::Schema(msg) => write!(f, "[{}] Schema Error: {}", self.code(), msg),
-            Error::Serialization(msg) => {
-                write!(f, "[{}] Serialization Error: {}", self.code(), msg)
+            Error::Encoding(msg) => {
+                write!(f, "[{}] Encoding Error: {}", self.code(), msg)
             }
             Error::InvalidOperation(msg) => {
                 write!(f, "[{}] Invalid Operation: {}", self.code(), msg)
@@ -110,13 +110,13 @@ impl From<std::io::Error> for Error {
 
 impl From<std::string::FromUtf8Error> for Error {
     fn from(err: std::string::FromUtf8Error) -> Self {
-        Error::Serialization(format!("UTF-8 conversion error: {}", err))
+        Error::Encoding(format!("UTF-8 conversion error: {}", err))
     }
 }
 
 impl From<std::num::ParseIntError> for Error {
     fn from(err: std::num::ParseIntError) -> Self {
-        Error::Serialization(format!("Integer parsing error: {}", err))
+        Error::Encoding(format!("Integer parsing error: {}", err))
     }
 }
 

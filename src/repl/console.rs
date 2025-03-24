@@ -95,7 +95,7 @@ impl<'a> Console<'a> {
     /// Starts the REPL loop, handling user input and commands.
     pub fn start(&mut self) -> Result<(), errors::Error> {
         self.draw()?;
-        echo_line(format!("Welcome to the {} {} REPL.\n", NAME, VERSION))?;
+        echo_line(format!("Welcome to the {} {} REPL.", NAME, VERSION))?;
         echo_lines(BANNER.to_string())?;
 
         let mut continue_prompt = false;
@@ -232,12 +232,11 @@ impl<'a> Console<'a> {
 
 /// Echoes a string to the console at the current scroll position.
 pub fn echo_line(s: String) -> io::Result<()> {
-    let (width, _) = terminal::size()?;
     execute!(
         io::stdout(),
         cursor::MoveToColumn(0),
-        Print(format!("{:<width$}", s, width = width as usize)),
-        //  terminal::Clear(terminal::ClearType::FromCursorDown),
+        Print(s),
+        terminal::Clear(terminal::ClearType::FromCursorDown),
         Print("\n"),
     )?;
     io::stdout().flush()?;
@@ -246,12 +245,12 @@ pub fn echo_line(s: String) -> io::Result<()> {
 
 /// Echoes an error message in red to the console.
 pub fn echo_error(s: String) -> io::Result<()> {
-    let (width, _) = terminal::size()?;
     execute!(
         io::stdout(),
         cursor::MoveToColumn(0),
         SetForegroundColor(Color::Red),
-        Print(format!("{:<width$}", s, width = width as usize)),
+        Print(s),
+        terminal::Clear(terminal::ClearType::FromCursorDown),
         ResetColor
     )?;
     io::stdout().flush()?;

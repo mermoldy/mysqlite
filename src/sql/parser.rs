@@ -2,7 +2,8 @@ use super::statement::*;
 use super::tokenizer;
 use super::validator;
 use crate::errors;
-use crate::storage::schema::DataType;
+use crate::storage::column::ColumnType;
+use crate::storage::schema::ColumnSchema;
 use std::collections::VecDeque;
 
 /// Parses an `INSERT` statement from tokenized SQL.
@@ -370,11 +371,13 @@ fn parse_column_schemas(columns_str: &str) -> Result<Vec<ColumnSchema>, errors::
                 _ => break,
             }
         }
+        let is_nullable = true; // TODO
         schemas.push(ColumnSchema {
             name,
-            is_primary,
             type_,
             default,
+            is_primary,
+            is_nullable,
         });
     }
     if schemas.is_empty() {
@@ -391,28 +394,28 @@ fn parse_column_schemas(columns_str: &str) -> Result<Vec<ColumnSchema>, errors::
 /// * `type_str` - The type string to parse.
 ///
 /// # Returns
-/// A `Result` containing the `DataType` or an `errors::Error`.
-fn parse_column_type(type_str: &str) -> Result<DataType, errors::Error> {
+/// A `Result` containing the `ColumnType` or an `errors::Error`.
+fn parse_column_type(type_str: &str) -> Result<ColumnType, errors::Error> {
     validator::validate_column_type(type_str)?;
     let upper = type_str.to_uppercase();
 
     match upper.as_str() {
-        "INT" => Ok(DataType::INT),
-        "SMALLINT" => Ok(DataType::SMALLINT),
-        "TINYINT" => Ok(DataType::TINYINT),
-        "BIGINT" => Ok(DataType::BIGINT),
-        "FLOAT" => Ok(DataType::FLOAT),
-        "DOUBLE" => Ok(DataType::DOUBLE),
-        "TEXT" => Ok(DataType::TEXT),
-        "DATETIME" => Ok(DataType::DATETIME),
-        "TIMESTAMP" => Ok(DataType::TIMESTAMP),
-        "BOOLEAN" => Ok(DataType::BOOLEAN),
+        "INT" => Ok(ColumnType::INT),
+        "SMALLINT" => Ok(ColumnType::SMALLINT),
+        "TINYINT" => Ok(ColumnType::TINYINT),
+        "BIGINT" => Ok(ColumnType::BIGINT),
+        "FLOAT" => Ok(ColumnType::FLOAT),
+        "DOUBLE" => Ok(ColumnType::DOUBLE),
+        "TEXT" => Ok(ColumnType::TEXT),
+        "DATETIME" => Ok(ColumnType::DATETIME),
+        "TIMESTAMP" => Ok(ColumnType::TIMESTAMP),
+        "BOOLEAN" => Ok(ColumnType::BOOLEAN),
         _ if upper.starts_with("VARCHAR(") && upper.ends_with(")") => {
             let len_str = &upper[8..upper.len() - 1];
             let len = len_str.parse::<u16>().map_err(|_| {
                 errors::Error::Syntax(format!("Invalid VARCHAR length: {}.", len_str))
             })?;
-            Ok(DataType::VARCHAR(len))
+            Ok(ColumnType::VARCHAR(len))
         }
         _ => Err(errors::Error::Syntax(format!(
             "Unsupported column type: {}.",
