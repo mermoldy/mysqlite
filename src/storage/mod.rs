@@ -6,5 +6,6 @@ mod row;
 pub mod schema;
 pub mod table;
 
-pub use row::{build_row, decode_row, encode_row, Row};
+pub use encoding::{decode_row, encode_row};
+pub use row::{build_row, Row};
 pub use table::{insert_row, select_rows, Table, SCHEMA};

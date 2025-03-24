@@ -1,5 +1,6 @@
 use super::column::ColumnType;
 use super::cursor;
+use super::encoding;
 use super::row;
 use super::schema::{ColumnSchema, TableSchema};
 use crate::errors;
@@ -183,7 +184,7 @@ pub fn select_rows(table: &mut Table) -> Result<std::vec::Vec<row::Row>, errors:
         buf.resize(row_size, 0);
         cursor.read_value(&mut buf)?;
 
-        rows.push(row::decode_row(&SCHEMA, buf)?);
+        rows.push(encoding::decode_row(&SCHEMA, buf)?);
         cursor::cursor_advance(&mut cursor);
     }
     Ok(rows)
