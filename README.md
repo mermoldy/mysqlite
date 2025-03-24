@@ -2,7 +2,8 @@
 
 A playground for learning database stuff.
 
-The goal of this project is to build a toy SQLite clone by following the tutorial <https://cstack.github.io/db_tutorial> (C -> Rust), develop an ORM based on it, and design an application using it — <https://kb.databasedesignbook.com/posts/google-calendar>.
+The goal of this project is to build a toy SQLite clone by following the tutorial <https://cstack.github.io/db_tutorial> (C -> Rust) with [MVCC](https://en.wikipedia.org/wiki/Multiversion_concurrency_control).
+and Client-Server architecture.
 
 ## Design
 
