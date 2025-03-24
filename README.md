@@ -2,7 +2,7 @@
 
 A playground for learning database stuff.
 
-The goal of this project is to build a toy SQLite clone by following the tutorial <https://cstack.github.io/db_tutorial> (C -> Rust) with [MVCC](https://en.wikipedia.org/wiki/Multiversion_concurrency_control).
+The goal of this project is to build a toy SQLite clone by following the tutorial <https://cstack.github.io/db_tutorial> (C -> Rust) with [MVCC](https://en.wikipedia.org/wiki/Multiversion_concurrency_control)
 and Client-Server architecture.
 
 ## Design
