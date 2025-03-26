@@ -278,7 +278,7 @@ fn execute_drop_statement(
     match stmt {
         sql::DropStatement::DropDatabasesStatement(name) => {
             if name == session.database.name {
-                return Err(errors::Error::InvalidOperation(
+                return Err(errors::Error::Command(
                     "Cannot drop the currently used database".to_string(),
                 ));
             }
@@ -308,8 +308,7 @@ pub fn execute_insert(
         .lock()
         .map_err(|_| errors::Error::LockTable("Failed to lock table for insert".to_string()))?;
 
-    let bin_row = storage::encode_row(&storage::SCHEMA, row)?;
-    storage::insert_row(&mut locked_table, &bin_row)?;
+    storage::insert_row(&mut locked_table, &row)?;
     Ok(())
 }
 

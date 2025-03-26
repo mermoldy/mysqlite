@@ -1,5 +1,5 @@
 use super::{buffer, prompt, status};
-use crate::{command, database, errors, session, sql};
+use crate::{command, database, errors, session, sql, storage};
 use crossterm::{
     cursor, execute,
     style::{Color, Print, ResetColor, SetForegroundColor},
@@ -24,11 +24,12 @@ Commands end with ; or \g. Type 'help;' or '\h' for help.
 const HELP: &str = r#"List of all Marble commands:
 Note that all text commands must be first on line and end with ';'
 
-?         (\?) Synonym for `help'.
-help      (\h) Display this help.
-use       (\u) Use another database. Takes database name as argument.
-version   (\v) Show version information.
-quit      (\q) Quit Marble.
+?           (\?) Synonym for 'help'.
+help        (\h) Display this help.
+use         (\u) Use another database. Takes database name as argument.
+version     (\v) Show version information.
+print_btree Print B-Tree node.
+quit        (\q) Quit Marble.
 "#;
 
 /// Starts a REPL session in raw console mode.
@@ -143,6 +144,7 @@ impl<'a> Console<'a> {
             }
             cmd if cmd.starts_with("use") || cmd.starts_with("\\u") => self.handle_use(cmd),
             "version" | "\\v" => self.handle_version(input),
+            "print_btree" => self.handle_print_btree(input),
             "help" | "\\h" | "\\?" | "?" => self.handle_help(input),
             _ => self.handle_command(input),
         }
@@ -153,7 +155,7 @@ impl<'a> Console<'a> {
         let dbname = cmd
             .split_whitespace()
             .nth(1)
-            .ok_or_else(|| err!(InvalidOperation, "USE must be followed by a database name"))?;
+            .ok_or_else(|| err!(Command, "USE must be followed by a database name"))?;
         let dbname = dbname.trim_end_matches(|c: char| c == ';').to_string();
         let db = database::Database::get(&dbname)?;
         self.session.set_database(db)?;
@@ -173,6 +175,21 @@ impl<'a> Console<'a> {
         self.prompt.append_line(cmd);
         next_line()?;
         echo_lines(HELP.to_string())?;
+        Ok(false)
+    }
+
+    fn handle_print_btree(&mut self, cmd: &str) -> Result<bool, errors::Error> {
+        self.prompt.append_line(cmd);
+        let (total, columns, rows) = self
+            .session
+            .database
+            .find_table(&"users".into())?
+            .lock()
+            .unwrap()
+            .build_btree()?;
+        next_line()?;
+        echo_lines(build_table(&columns, &rows))?;
+        echo_line(format!("Total pages: {}", total))?;
         Ok(false)
     }
 
@@ -235,6 +252,7 @@ pub fn echo_line(s: String) -> io::Result<()> {
     execute!(
         io::stdout(),
         cursor::MoveToColumn(0),
+        terminal::Clear(terminal::ClearType::UntilNewLine),
         Print(s),
         terminal::Clear(terminal::ClearType::FromCursorDown),
         Print("\n"),
@@ -249,6 +267,7 @@ pub fn echo_error(s: String) -> io::Result<()> {
         io::stdout(),
         cursor::MoveToColumn(0),
         SetForegroundColor(Color::Red),
+        terminal::Clear(terminal::ClearType::UntilNewLine),
         Print(s),
         terminal::Clear(terminal::ClearType::FromCursorDown),
         ResetColor

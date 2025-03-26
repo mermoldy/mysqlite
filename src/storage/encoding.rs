@@ -148,7 +148,7 @@ impl ColumnValue {
 }
 
 // Encode a row from bytes based on the schema
-pub fn encode_row(schema: &TableSchema, row: Row) -> Result<Vec<u8>, errors::Error> {
+pub fn encode_row(schema: &TableSchema, row: &Row) -> Result<Vec<u8>, errors::Error> {
     let row_size = schema.get_row_size();
     let mut result = Vec::with_capacity(row_size);
 
@@ -171,7 +171,7 @@ pub fn encode_row(schema: &TableSchema, row: Row) -> Result<Vec<u8>, errors::Err
 }
 
 // Decode a row from bytes based on the schema
-pub fn decode_row(schema: &TableSchema, encoded: Vec<u8>) -> Result<Row, errors::Error> {
+pub fn decode_row(schema: &TableSchema, encoded: &Vec<u8>) -> Result<Row, errors::Error> {
     let mut row = Row {
         inner: HashMap::new(),
     };

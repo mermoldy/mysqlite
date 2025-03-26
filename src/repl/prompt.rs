@@ -10,6 +10,21 @@ use std::path::PathBuf;
 use tracing::warn;
 
 const NAME: &str = env!("CARGO_PKG_NAME");
+const COMPLETIONS: &[&str] = &[
+    "help",
+    "exit",
+    "clear",
+    "create",
+    "table",
+    "database",
+    "insert",
+    "select",
+    "into",
+    "update",
+    "delete",
+    "from",
+    "print_btree",
+];
 
 /// A terminal prompt structure for handling user input and command history.
 #[derive(Debug)]
@@ -119,7 +134,7 @@ impl Prompt {
     /// * `input` - The current input string to check for wrapping
     fn scroll_prompt_if_needed(&mut self, input: &str) -> io::Result<()> {
         let (width, height) = terminal::size()?;
-        let wraps = input.len() as u16 / width + 1;
+        let wraps = (NAME.len() as u16 + 1 + input.len() as u16) / width + 1;
 
         if self.prompt_y + wraps >= height {
             let to_scroll = (self.prompt_y + wraps - height + 1).max(1);
@@ -146,11 +161,6 @@ impl Prompt {
         buffer: &mut super::buffer::Buffer,
         status: &mut super::status::StatusBar,
     ) -> io::Result<()> {
-        const COMPLETIONS: &[&str] = &[
-            "help", "exit", "clear", "create", "table", "database", "insert", "select", "into",
-            "update", "delete", "from",
-        ];
-
         loop {
             match event::read()? {
                 event::Event::Key(KeyEvent {

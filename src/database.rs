@@ -15,7 +15,7 @@ impl Database {
         std::fs::create_dir_all(&path)?;
 
         if path.exists() && std::fs::read_dir(&path)?.next().is_some() {
-            return Err(err!(Db, "Database '{}' already exists", name));
+            return Err(err!(Storage, "Database '{}' already exists", name));
         }
 
         Self::load(name.to_string(), path)
@@ -24,7 +24,7 @@ impl Database {
     pub fn get(name: &String) -> Result<Self, Error> {
         let path = PathBuf::from(format!("data/{}", name));
         if !path.exists() {
-            return Err(err!(Db, "Database '{}' not found", name));
+            return Err(err!(Storage, "Database '{}' not found", name));
         }
         Self::load(name.to_string(), path)
     }
@@ -59,7 +59,12 @@ impl Database {
 
     pub fn create_table(&mut self, name: &String) -> Result<(), Error> {
         if self.tables.contains_key(name) {
-            return Err(err!(Db, "Table '{}.{}' already exists", self.name, name));
+            return Err(err!(
+                Storage,
+                "Table '{}.{}' already exists",
+                self.name,
+                name
+            ));
         }
 
         let table = storage::table::create_table(&self.name, name)?;
@@ -71,7 +76,7 @@ impl Database {
     pub fn drop_table(&mut self, name: &String) -> Result<(), Error> {
         self.tables
             .remove(name)
-            .ok_or_else(|| err!(Db, "Table '{}.{}' doesn't exist", self.name, name))?;
+            .ok_or_else(|| err!(Storage, "Table '{}.{}' doesn't exist", self.name, name))?;
         storage::table::drop_table(&self.name, name)?;
         Ok(())
     }
@@ -79,7 +84,7 @@ impl Database {
     pub fn find_table(&self, name: &String) -> Result<&Arc<Mutex<storage::Table>>, Error> {
         self.tables
             .get(name)
-            .ok_or_else(|| err!(Db, "Table '{}.{}' doesn't exist", self.name, name))
+            .ok_or_else(|| err!(Storage, "Table '{}.{}' doesn't exist", self.name, name))
     }
 
     pub fn flush(&self) -> Result<(), Error> {
@@ -127,7 +132,7 @@ pub fn show_databases() -> Result<Vec<String>, Error> {
 pub fn drop_database(name: &str) -> Result<(), Error> {
     let path = PathBuf::from(format!("data/{}", name));
     if !path.exists() {
-        return Err(err!(Db, "Unknown database '{}'", name));
+        return Err(err!(Storage, "Unknown database '{}'", name));
     }
     std::fs::remove_dir_all(&path)?;
     Ok(())

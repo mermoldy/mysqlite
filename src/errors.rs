@@ -9,24 +9,39 @@ pub enum Error {
     /// I/O-related error (e.g., file operations).
     /// Error code: 1000
     Io(std::io::Error),
-    /// Database-specific error (e.g., connection failure).
-    /// Error code: 2000
-    Db(String),
-    /// SQL syntax error.
+    /// SQL syntax error (e.g., missing semicolon, invalid token).
     /// Error code: 3000
     Syntax(String),
-    /// Error acquiring a table lock.
+    /// Error acquiring a table lock (e.g., deadlock).
     /// Error code: 4000
     LockTable(String),
-    /// Schema-related error (e.g., invalid column).
+    /// Schema-related error (e.g., invalid column, table not found).
     /// Error code: 5000
     Schema(String),
-    /// Row serialization/deserialization error.
+    /// Row serialization/deserialization error (e.g., encoding/decoding issues).
     /// Error code: 6000
     Encoding(String),
-    /// Invalid operation (e.g., dropping current database).
+    /// Invalid command error (e.g., dropping current database, unrecognized command).
     /// Error code: 7000
-    InvalidOperation(String),
+    Command(String),
+    /// Storage-related error (e.g., disk full, page corruption).
+    /// Error code: 8000
+    Storage(String),
+    /// Session-related error (e.g., session expired, invalid session ID).
+    /// Error code: 8100
+    Session(String),
+    /// SQL semantic error (e.g., ambiguous column, invalid join).
+    /// Error code: 3100
+    Semantic(String),
+    /// Transaction-related error (e.g., rollback failure, conflict).
+    /// Error code: 8200
+    Transaction(String),
+    /// Authentication/authorization error (e.g., invalid credentials).
+    /// Error code: 8300
+    Auth(String),
+    /// Resource limit exceeded (e.g., too many connections).
+    /// Error code: 8400
+    ResourceLimit(String),
     /// Miscellaneous uncategorized error.
     /// Error code: 9000
     Other(String),
@@ -34,41 +49,39 @@ pub enum Error {
 
 impl Error {
     /// Returns the error code associated with this error variant.
-    ///
-    /// # Examples
-    /// ```
-    /// let err = Error::Syntax("Missing semicolon".to_string());
-    /// assert_eq!(err.code(), 3000);
-    /// ```
     pub fn code(&self) -> u32 {
         match self {
             Error::Io(_) => 1000,
-            Error::Db(_) => 2000,
             Error::Syntax(_) => 3000,
             Error::LockTable(_) => 4000,
             Error::Schema(_) => 5000,
             Error::Encoding(_) => 6000,
-            Error::InvalidOperation(_) => 7000,
+            Error::Command(_) => 7000,
+            Error::Storage(_) => 8000,
+            Error::Session(_) => 8100,
+            Error::Semantic(_) => 3100,
+            Error::Transaction(_) => 8200,
+            Error::Auth(_) => 8300,
+            Error::ResourceLimit(_) => 8400,
             Error::Other(_) => 9000,
         }
     }
 
     /// Returns a human-readable error category for this error variant.
-    ///
-    /// # Examples
-    /// ```
-    /// let err = Error::LockTable("Failed to lock table".to_string());
-    /// assert_eq!(err.category(), "Table Lock");
-    /// ```
     pub fn category(&self) -> &'static str {
         match self {
             Error::Io(_) => "I/O",
-            Error::Db(_) => "Database",
-            Error::Syntax(_) => "Syntax",
+            Error::Syntax(_) => "SQL Syntax",
             Error::LockTable(_) => "Table Lock",
             Error::Schema(_) => "Schema",
             Error::Encoding(_) => "Encoding",
-            Error::InvalidOperation(_) => "Invalid Operation",
+            Error::Command(_) => "Command",
+            Error::Storage(_) => "Storage",
+            Error::Session(_) => "Session",
+            Error::Semantic(_) => "SQL Semantic",
+            Error::Transaction(_) => "Transaction",
+            Error::Auth(_) => "Authentication",
+            Error::ResourceLimit(_) => "Resource Limit",
             Error::Other(_) => "Other",
         }
     }
@@ -78,15 +91,18 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Error::Io(e) => write!(f, "[{}] I/O Error: {}", self.code(), e),
-            Error::Db(msg) => write!(f, "[{}] Database Error: {}", self.code(), msg),
             Error::Syntax(msg) => write!(f, "[{}] Syntax Error: {}", self.code(), msg),
             Error::LockTable(msg) => write!(f, "[{}] Lock Table Error: {}", self.code(), msg),
             Error::Schema(msg) => write!(f, "[{}] Schema Error: {}", self.code(), msg),
-            Error::Encoding(msg) => {
-                write!(f, "[{}] Encoding Error: {}", self.code(), msg)
-            }
-            Error::InvalidOperation(msg) => {
-                write!(f, "[{}] Invalid Operation: {}", self.code(), msg)
+            Error::Encoding(msg) => write!(f, "[{}] Encoding Error: {}", self.code(), msg),
+            Error::Command(msg) => write!(f, "[{}] Command Error: {}", self.code(), msg),
+            Error::Storage(msg) => write!(f, "[{}] Storage Error: {}", self.code(), msg),
+            Error::Session(msg) => write!(f, "[{}] Session Error: {}", self.code(), msg),
+            Error::Semantic(msg) => write!(f, "[{}] Semantic Error: {}", self.code(), msg),
+            Error::Transaction(msg) => write!(f, "[{}] Transaction Error: {}", self.code(), msg),
+            Error::Auth(msg) => write!(f, "[{}] Authentication Error: {}", self.code(), msg),
+            Error::ResourceLimit(msg) => {
+                write!(f, "[{}] Resource Limit Error: {}", self.code(), msg)
             }
             Error::Other(msg) => write!(f, "[{}] Unknown Error: {}", self.code(), msg),
         }
@@ -129,9 +145,9 @@ impl From<std::num::ParseIntError> for Error {
 /// assert_eq!(err.code(), 3000);
 /// assert_eq!(err.to_string(), "[3000] Syntax Error: Missing WHERE clause");
 ///
-/// let err = err!(LockTable, "Failed to lock table '{}'", "users");
-/// assert_eq!(err.code(), 4000);
-/// assert_eq!(err.to_string(), "[4000] Lock Table Error: Failed to lock table 'users'");
+/// let err = err!(Command, "Unrecognized command '{}'", "FOO");
+/// assert_eq!(err.code(), 7000);
+/// assert_eq!(err.to_string(), "[7000] Command Error: Unrecognized command 'FOO'");
 /// ```
 #[macro_export]
 macro_rules! err {
