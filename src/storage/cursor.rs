@@ -2,9 +2,9 @@
 //!
 //! Provides cursor-based navigation and manipulation of database tables,
 //! enabling traversal and modification of table data.
-
-use super::table;
+use super::{btree::Node, btree::NodeType, table};
 use crate::errors::Error;
+use tracing::{debug, trace};
 
 /// Represents a position within a database table
 ///
@@ -59,13 +59,7 @@ impl<'a> Cursor<'a> {
     /// - Reading from the page fails
     pub fn read_value(&mut self, buf: &mut Vec<u8>) -> Result<(), Error> {
         let page_num = self.page_num;
-        let page = self
-            .table
-            .pager
-            .get(page_num)
-            .map_err(|e| Error::Storage(format!("Failed to get page: {}", e)))?
-            .lock()
-            .map_err(|_| Error::Storage("Page lock poisoned".into()))?;
+        let page = self.table.pager.get(page_num)?;
 
         let value = page
             .leaf_node_value(self.cell_num as usize)
@@ -84,25 +78,16 @@ impl<'a> Cursor<'a> {
     /// # Returns
     /// A new `Cursor` positioned at the table's first element
     pub fn start(table: &'a mut table::Table) -> Result<Self, Error> {
-        let page_num = table.root_page_num;
-        let cell_num = 0; // Start from the first cell (0-indexed)
+        let mut cursor = Cursor::find(table, 0)?;
 
-        let num_cells = table
+        let num_cells = cursor
+            .table
             .pager
-            .get(table.root_page_num)
-            .map_err(|e| Error::Storage(format!("Failed to get root page: {}", e)))?
-            .lock()
-            .map_err(|_| Error::Storage("Root page lock poisoned".into()))?
+            .get(cursor.page_num)?
             .leaf_node_num_cells()?;
+        cursor.end_of_table = num_cells == 0;
 
-        let end_of_table = num_cells == 0;
-
-        Ok(Cursor {
-            table,
-            page_num,
-            cell_num,
-            end_of_table,
-        })
+        Ok(cursor)
     }
 
     /// Creates a new cursor positioned at the end of the table
@@ -116,10 +101,7 @@ impl<'a> Cursor<'a> {
         let page_num = table.root_page_num;
         let cell_num = table
             .pager
-            .get(table.root_page_num)
-            .map_err(|e| Error::Storage(format!("Failed to get root page: {}", e)))?
-            .lock()
-            .map_err(|_| Error::Storage("Root page lock poisoned".into()))?
+            .get(table.root_page_num)?
             .leaf_node_num_cells()?;
 
         Ok(Cursor {
@@ -139,18 +121,17 @@ impl<'a> Cursor<'a> {
     /// # Returns
     /// A new `Cursor` positioned to a given key
     pub fn find(table: &'a mut table::Table, key: u32) -> Result<Self, Error> {
+        debug!("Searching for a cursor position for {}", key);
+
         let page_num = table.root_page_num;
-        // let root_node = table::get_page(table, table.root_page_num)
-        //     .map_err(|e| Error::Storage(format!("Failed to get root page: {}", e)))?
-        //     .lock()
-        //     .map_err(|_| Error::Storage("Root page lock poisoned".into()))?;
+        let root_node = table.pager.get(table.root_page_num)?;
+        let root_node_type = root_node.get_node_type()?;
+        drop(root_node);
 
-        // match root_node {
-        //     LeafNode => Cursor::leaf_node_find(table, page_num, key),
-        //     _ => Error::Storage("Need to implement searching an internal node".into()),
-        // }
-
-        Cursor::leaf_node_find(table, page_num, key)
+        match root_node_type {
+            NodeType::NodeLeaf => Cursor::leaf_node_find(table, page_num, key),
+            NodeType::NodeInternal => Cursor::internal_node_find(table, page_num, key),
+        }
     }
 
     pub fn leaf_node_find(
@@ -158,46 +139,44 @@ impl<'a> Cursor<'a> {
         page_num: u32,
         key: u32,
     ) -> Result<Self, Error> {
-        let mut cell_num: Option<u32> = None;
+        let node = table.pager.get(page_num)?;
+        let cell_num = node.leaf_node_find(key)?;
+        drop(node);
 
-        {
-            let node = table
-                .pager
-                .get(page_num)
-                .map_err(|e| Error::Storage(format!("Failed to get page: {}", e)))?
-                .lock()
-                .map_err(|_| Error::Storage("Root page lock poisoned".into()))?;
-
-            let mut min_index = 0;
-            let mut one_past_max_index = node.leaf_node_num_cells()?;
-
-            // Binary search
-            while one_past_max_index != min_index {
-                let index = (min_index + one_past_max_index) / 2;
-                let key_at_index = node.leaf_node_key(index as usize)?;
-                if key == key_at_index {
-                    cell_num = Some(index);
-                    break;
-                }
-
-                if key < key_at_index {
-                    one_past_max_index = index;
-                } else {
-                    min_index = index + 1;
-                }
-            }
-
-            if cell_num.is_none() {
-                cell_num = Some(min_index);
-            }
-        }
-
-        return Ok(Cursor {
+        Ok(Cursor {
             table,
             page_num,
-            cell_num: cell_num.unwrap_or(0),
+            cell_num,
             end_of_table: false,
-        });
+        })
+    }
+
+    /// This function will perform binary search to find the child that should contain the given
+    /// key. Remember that the key to the right of each child pointer is the maximum key contained
+    /// by that child.
+    pub fn internal_node_find(
+        table: &'a mut table::Table,
+        page_num: u32,
+        key: u32,
+    ) -> Result<Self, Error> {
+        trace!(
+            page_num,
+            "Searching for a position for {} on an internal node",
+            key
+        );
+        let node = table.pager.get(page_num)?;
+        let child_num = node.internal_node_find(key)?;
+        drop(node);
+
+        trace!(child_num, "Found child node");
+        let child = table.pager.get(child_num)?;
+        let child_node_type = child.get_node_type()?;
+        drop(child);
+
+        match child_node_type {
+            NodeType::NodeLeaf => Cursor::leaf_node_find(table, child_num, key),
+            NodeType::NodeInternal => Cursor::internal_node_find(table, child_num, key),
+        }
     }
 
     /// Advances the cursor to the next cell
@@ -207,13 +186,7 @@ impl<'a> Cursor<'a> {
     /// - Page cannot be retrieved
     /// - Cannot read number of cells
     pub fn advance(&mut self) -> Result<(), Error> {
-        let node = self
-            .table
-            .pager
-            .get(self.page_num)
-            .map_err(|e| Error::Storage(format!("Failed to get page: {}", e)))?
-            .lock()
-            .map_err(|_| Error::Storage("Page lock poisoned".into()))?;
+        let node = self.table.pager.get(self.page_num)?;
 
         self.cell_num += 1;
         if self.cell_num >= node.leaf_node_num_cells()? {

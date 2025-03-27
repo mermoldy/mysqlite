@@ -1,5 +1,6 @@
 use super::btree;
 use super::btree::Node;
+use super::btree::NodeType;
 use super::column::ColumnType;
 use super::cursor;
 use super::encoding;
@@ -15,7 +16,7 @@ use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::MutexGuard;
 use std::sync::{Arc, Mutex};
-use tracing::{info, warn};
+use tracing::{debug, info, trace, warn};
 
 #[derive(Encode, Decode, Debug)]
 pub struct TablespaceHeader {
@@ -95,35 +96,45 @@ pub struct Pager {
 impl Pager {
     pub fn new(row_size: u32) -> Self {
         let pages: heapless::Vec<Arc<Mutex<Node>>, TABLE_MAX_PAGES> = heapless::Vec::new();
-        Pager { pages, row_size }
+        let mut p = Pager { pages, row_size };
+        p.try_create(0);
+        p
     }
 
     pub fn push(&mut self, node: Node) {
         if let Err(_) = self.pages.push(Arc::new(Mutex::new(node))) {}
     }
 
-    /// Allocate memory only when we try to access a new page.
-    pub fn allocate(&mut self, page_num: u32) -> Result<(), Error> {
+    pub fn try_create(&mut self, page_num: u32) -> Result<(), Error> {
         if page_num >= self.pages.len() as u32 {
             let p: [u8; 4096] = [0; 4096];
             let mut n = btree::Node::new(&p, self.row_size as usize);
             n.set_node_type(btree::NodeType::NodeLeaf)?;
             n.set_leaf_node_num_cells(0)?;
+            n.set_node_root(self.pages.len() == 0)?;
             if let Err(_) = self.pages.push(Arc::new(Mutex::new(n))) {}
         }
         Ok(())
     }
 
-    pub fn get(&self, page_num: u32) -> Result<&Arc<Mutex<btree::Node>>, Error> {
-        let page = match self.pages.get(page_num as usize) {
+    pub fn get(&self, page_num: u32) -> Result<MutexGuard<btree::Node>, Error> {
+        let node_arc = match self.pages.get(page_num as usize) {
             Some(p) => p,
             None => {
                 return Err(Error::Storage(
                     format!("Memory page {} not found.", page_num).to_owned(),
-                ))
+                ));
             }
         };
-        Ok(page)
+
+        node_arc
+            .try_lock()
+            .map_err(|_| Error::LockTable("Failed to lock the node".to_string()))
+    }
+
+    pub fn get_or_create(&mut self, page_num: u32) -> Result<MutexGuard<btree::Node>, Error> {
+        self.try_create(page_num)?;
+        self.get(page_num)
     }
 
     pub fn len(&self) -> usize {
@@ -160,7 +171,6 @@ impl Table {
                 Err(_) => return Err(Error::Storage(format!("Memory page {} not found.", i))),
             };
 
-            let page_lock = page.lock().unwrap();
             let page_header: [u8; PAGE_HEADER_SIZE] = encode_header(&PageHeader {
                 page_n_recs: 0,
                 page_n_heap: 0,
@@ -170,7 +180,7 @@ impl Table {
                 page_next: 0,
             })?;
             file.write_all(&page_header)?;
-            file.write_all(&page_lock.as_slice())?;
+            file.write_all(&page.as_slice())?;
         }
         info!("Flushed {} pages.", self.pager.len());
 
@@ -188,19 +198,29 @@ impl Table {
     /// Returns an `Error::Storage` if a page cannot be accessed or if node data cannot be read.
     pub fn build_btree(&self) -> Result<(usize, Vec<String>, Vec<Vec<String>>), Error> {
         let total = self.pager.len();
-        let columns = vec!["Page".to_string(), "Index".to_string(), "Key".to_string()];
+        let columns = vec![
+            "Page".to_string(),
+            "Index".to_string(),
+            "Key".to_string(),
+            "Parent".to_string(),
+        ];
 
         let mut rows = Vec::new();
         for page_num in 0..total {
-            let node = self.pager.get(page_num as u32)?.lock().unwrap();
+            let node = self.pager.get(page_num as u32)?;
             let num_cells = node.leaf_node_num_cells()?;
 
             for i in 0..num_cells {
+                if node.get_node_type()? == NodeType::NodeInternal {
+                    continue;
+                }
+                let parent = node.node_parent()?;
                 let key = node.leaf_node_key(i as usize)?;
                 let row = vec![
-                    page_num.to_string(), // Page number
-                    i.to_string(),        // Cell index
-                    format!("{:?}", key), // Key value (debug-formatted)
+                    page_num.to_string(),    // Page number
+                    i.to_string(),           // Cell index
+                    format!("{:?}", key),    // Key value (debug-formatted)
+                    format!("{:?}", parent), // Key value (debug-formatted)
                 ];
                 rows.push(row);
             }
@@ -212,9 +232,9 @@ impl Table {
 
 pub fn insert_row(table: &mut Table, row: &row::Row) -> Result<(), Error> {
     let row_size = table.schema.get_row_size();
-
     let row_id = row.get_id(&table.schema)?;
     let row_bin = encoding::encode_row(&table.schema, row)?;
+    debug!(row_id = row_id, row_size = row_size, "Inserting a row...");
 
     if row_bin.len() != row_size {
         return Err(Error::Storage(format!(
@@ -223,16 +243,9 @@ pub fn insert_row(table: &mut Table, row: &row::Row) -> Result<(), Error> {
             row_size
         )));
     }
-
     let mut cursor = cursor::Cursor::find(table, row_id)?;
 
-    let mut node = cursor
-        .table
-        .pager
-        .get(cursor.page_num)?
-        .try_lock()
-        .map_err(|_| err!(Storage, "Failed to lock a page for the node"))?;
-
+    let mut node = cursor.table.pager.get(cursor.page_num)?;
     let num_cells = node.leaf_node_num_cells()?;
 
     if cursor.cell_num < num_cells {
@@ -249,17 +262,14 @@ pub fn insert_row(table: &mut Table, row: &row::Row) -> Result<(), Error> {
         return Ok(());
     }
 
-    //  cursor.write_value(row)
-
     if cursor.cell_num < num_cells {
         // Make room for new cell
-        for i in (cursor.cell_num..num_cells).rev() {
+        for i in (cursor.cell_num + 1..=num_cells).rev() {
             let prev: Vec<u8>;
             {
-                prev = node.leaf_node_cell(i as usize)?.to_vec();
+                prev = node.leaf_node_cell(i as usize - 1)?.to_vec();
             }
-            node.leaf_node_cell_mut(i as usize + 1)?
-                .copy_from_slice(&prev);
+            node.leaf_node_cell_mut(i as usize)?.copy_from_slice(&prev);
         }
     }
 
@@ -278,48 +288,55 @@ pub fn leaf_node_split_and_insert(
     row_id: u32,
     row_bin: Vec<u8>,
 ) -> Result<(), Error> {
+    trace!("Splitting leaf node...");
     let new_page_num = cursor.table.pager.get_unused_page_num() as u32;
-    cursor.table.pager.allocate(new_page_num)?;
+    cursor.table.pager.try_create(new_page_num)?;
 
-    let mut old_node = cursor
-        .table
-        .pager
-        .get(cursor.page_num)?
-        .try_lock()
-        .map_err(|_| err!(Storage, "Failed to lock a page for the node"))?;
-    let mut new_node = cursor
-        .table
-        .pager
-        .get(new_page_num)?
-        .try_lock()
-        .map_err(|e| err!(Storage, "Failed to lock a page for a new node"))?;
+    let mut old_node = cursor.table.pager.get(cursor.page_num)?;
+    let old_max = old_node.get_node_max_key()?;
+    let mut new_node = cursor.table.pager.get(new_page_num)?;
 
     initialize_leaf_node(&mut new_node)?;
+    new_node.set_node_parent(old_node.node_parent()?)?;
+
+    // Whenever we split a leaf node, update the sibling pointers.
+    // The old leaf’s sibling becomes the new leaf, and the new leaf’s sibling becomes
+    // whatever used to be the old leaf’s sibling.
+    new_node.set_leaf_node_next_leaf(old_node.leaf_node_next_leaf()?)?;
+    old_node.set_leaf_node_next_leaf(new_page_num)?;
 
     let leaf_node_left_split_count = old_node.leaf_node_left_split_count();
     let leaf_node_max_cells = old_node.leaf_node_max_cells();
+
+    // let insert_node = if cursor.cell_num as usize >= leaf_node_left_split_count {
+    //     &mut new_node
+    // } else {
+    //     &mut old_node
+    // };
+
+    // let insert_node_num_cells = insert_node.leaf_node_num_cells()?;
+    // insert_node.set_leaf_node_num_cells(insert_node_num_cells + 1)?;
 
     let old = old_node.clone();
 
     // All existing keys plus new key should be divided
     // evenly between old (left) and new (right) nodes.
     // Starting from the right, move each key to correct position.
-    for i in (0..leaf_node_max_cells).rev() {
+    for i in (0..=leaf_node_max_cells).rev() {
         let dest_node = if i >= leaf_node_left_split_count {
+            trace!("select new node");
             &mut new_node
         } else {
+            trace!("select old node");
             &mut old_node
         };
 
-        let dest = dest_node.leaf_node_cell_mut(i % leaf_node_left_split_count)?;
+        let cell_num = i % leaf_node_left_split_count;
+        let dest = dest_node.leaf_node_cell_mut(cell_num)?;
 
         if i == cursor.cell_num as usize {
-            let num_cells = dest_node.leaf_node_num_cells()?;
-            dest_node.set_leaf_node_num_cells(num_cells + 1)?;
-            dest_node.set_leaf_node_key(cursor.cell_num as usize, row_id)?;
-            dest_node.set_leaf_node_value(cursor.cell_num as usize, row_bin.as_slice())?;
-
-            continue;
+            dest_node.set_leaf_node_key(cell_num as usize, row_id)?;
+            dest_node.set_leaf_node_value(cell_num as usize, row_bin.as_slice())?;
         } else if i > cursor.cell_num as usize {
             dest.copy_from_slice(old.leaf_node_cell(i - 1)?);
         } else {
@@ -334,13 +351,88 @@ pub fn leaf_node_split_and_insert(
     // We need to update the nodes’ parent. If the original node was the root,
     // it had no parent. In that case, create a new root node to act as the parent.
     if old_node.is_node_root()? {
+        drop(old_node);
+        drop(new_node);
+
         create_new_root(cursor.table, new_page_num)?;
         return Ok(());
     } else {
+        let parent_page_num = old_node.node_parent()?;
+        let new_max = old_node.get_node_max_key()?;
+
+        drop(old_node);
+        drop(new_node);
+
+        let mut parent = cursor.table.pager.get(parent_page_num)?;
+        let parent_old_child_index = parent.internal_node_find_child(old_max)?;
+        parent.set_internal_node_key(parent_old_child_index, new_max)?;
+
+        drop(parent);
+        internal_node_insert(cursor, parent_page_num, new_page_num)?;
+
+        return Ok(());
+    }
+}
+
+// Add a new child/key pair to parent that corresponds to child
+// Because we store the rightmost child pointer separately from the rest of the child/key pairs, we have to handle
+// things differently if the new child is going to become the rightmost child.
+// In our example, we would get into the else block. First we make room for the new cell
+// by shifting other cells one space to the right. (Although in our example there are 0 cells to shift)
+// Next, we write the new child pointer and key into the cell determined by index.
+pub fn internal_node_insert(
+    cursor: &mut cursor::Cursor,
+    parent_page_num: u32,
+    child_page_num: u32,
+) -> Result<(), Error> {
+    let mut parent = cursor.table.pager.get(parent_page_num)?;
+    let child = cursor.table.pager.get(child_page_num)?;
+
+    let child_max_key: u32 = child.get_node_max_key()?;
+
+    // The index where the new cell (child/key pair) should be inserted depends on the maximum key in the new child.
+    let index = parent.internal_node_find_child(child_max_key)?;
+
+    let original_num_keys = parent.internal_node_num_keys()?;
+    parent.set_internal_node_num_keys(original_num_keys + 1)?;
+
+    if original_num_keys >= btree::INTERNAL_NODE_MAX_CELLS as u32 {
         return Err(Error::Storage(
-            "Need to implement updating parent after split".into(),
+            "Need to implement splitting internal node".into(),
         ));
     }
+
+    let p2 = parent.clone(); // XXX: bullshit
+    let right_child_page_num_bytes = p2.internal_node_right_child()?;
+    let right_child_page_num = u32::from_le_bytes(
+        parent
+            .internal_node_right_child()?
+            .try_into()
+            .map_err(|e| err!(Storage, "Failed to decode right_child_page_num: {:?}", e))?,
+    );
+
+    let right_child = cursor.table.pager.get(right_child_page_num)?;
+
+    if child_max_key > right_child.get_node_max_key()? {
+        // Replace right child
+        parent
+            .internal_node_child_mut(original_num_keys)?
+            .copy_from_slice(right_child_page_num_bytes);
+        parent.set_internal_node_key(original_num_keys, right_child.get_node_max_key()?)?;
+        parent
+            .internal_node_right_child_mut()?
+            .copy_from_slice(&child_page_num.to_le_bytes());
+    } else {
+        // Make room for the new cell
+        let source_parent = parent.clone();
+        for i in (index + 1..=original_num_keys).rev() {
+            let destination = parent.internal_node_cell_mut(i)?;
+            let source = source_parent.internal_node_cell(i - 1)?;
+            destination.copy_from_slice(source);
+        }
+    }
+
+    Ok(())
 }
 
 // Creating a New Root
@@ -351,20 +443,22 @@ pub fn leaf_node_split_and_insert(
 // tree remains height balanced without violating any B+-tree property.
 // At this point, we’ve already allocated the right child and moved the upper half into it.
 // Our function takes the right child as input and allocates a new page to store the left child.
-pub fn create_new_root(table: &Table, right_child_page_num: u32) -> Result<(), Error> {
+pub fn create_new_root(table: &mut Table, right_child_page_num: u32) -> Result<(), Error> {
     // Handle splitting the root.
     // Old root copied to new page, becomes left child.
     // Address of right child passed in.
     // Re-initialize root page to contain the new root node.
-    // New root node points to two children.
-    let mut root = table.pager.get(table.root_page_num)?.try_lock().unwrap();
-    let right_child = table.pager.get(right_child_page_num)?.try_lock().unwrap();
+    // New root node points to two children
+    //
+    trace!("creating a new root");
     let left_child_page_num = table.pager.get_unused_page_num();
-    let mut left_child = table
-        .pager
-        .get(left_child_page_num as u32)?
-        .try_lock()
-        .unwrap();
+
+    table.pager.try_create(right_child_page_num)?;
+    table.pager.try_create(left_child_page_num as u32)?;
+
+    let mut root = table.pager.get(table.root_page_num)?;
+    let mut right_child = table.pager.get(right_child_page_num)?;
+    let mut left_child = table.pager.get(left_child_page_num as u32)?;
 
     // The old root is copied to the left child so we can reuse the root page
     left_child.data.copy_from_slice(&root.data);
@@ -374,13 +468,17 @@ pub fn create_new_root(table: &Table, right_child_page_num: u32) -> Result<(), E
     initialize_internal_node(&mut root)?;
     root.set_node_root(true)?;
     root.set_internal_node_num_keys(1)?;
-    root.internal_node_child(0)?
-        .copy_from_slice((left_child_page_num as u32).to_be_bytes().as_slice());
+    root.internal_node_child_mut(0)?
+        .copy_from_slice((left_child_page_num as u32).to_le_bytes().as_slice());
 
     let left_child_max_key = left_child.get_node_max_key()?;
     root.set_internal_node_key(0, left_child_max_key)?;
-    root.internal_node_right_child()?
-        .copy_from_slice((right_child_page_num as u32).to_be_bytes().as_slice());
+    root.internal_node_right_child_mut()?
+        .copy_from_slice((right_child_page_num as u32).to_le_bytes().as_slice());
+
+    left_child.set_node_parent(table.root_page_num)?;
+    right_child.set_node_parent(table.root_page_num)?;
+
     Ok(())
 }
 
@@ -388,6 +486,7 @@ pub fn initialize_leaf_node(node: &mut Node) -> Result<(), Error> {
     node.set_node_type(btree::NodeType::NodeLeaf)?;
     node.set_node_root(false)?;
     node.set_leaf_node_num_cells(0)?;
+    node.set_leaf_node_next_leaf(0)?; // 0 represents no sibling
     Ok(())
 }
 
@@ -443,9 +542,6 @@ pub fn load_table(database: &String, name: &String) -> Result<Table, Error> {
         pager.push(node);
     }
 
-    // Always allocate root page.
-    pager.allocate(root_page_num)?;
-
     let table = Table {
         name: name.clone(),
         path: path,
@@ -458,7 +554,6 @@ pub fn load_table(database: &String, name: &String) -> Result<Table, Error> {
 }
 
 pub fn create_table(database: &String, name: &String) -> Result<Table, Error> {
-    let pages: heapless::Vec<Arc<Mutex<Node>>, TABLE_MAX_PAGES> = heapless::Vec::new();
     let root_page_num = 0;
     let row_size = SCHEMA.get_row_size();
     let pager = Pager::new(row_size as u32);

@@ -188,7 +188,7 @@ mod tests {
             "[4000] Lock Table Error: Deadlock detected"
         );
 
-        let err = err!(Db, "Connection failed: {}", "timeout");
+        let err = err!(Storage, "Connection failed: {}", "timeout");
         assert_eq!(err.code(), 2000);
         assert_eq!(
             err.to_string(),

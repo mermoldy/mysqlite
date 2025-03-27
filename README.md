@@ -31,9 +31,9 @@ First part is to imlement basic stuff using <https://cstack.github.io/db_tutoria
 - [x] **Part 8** - B-Tree Leaf Node Format
 - [x] **Part 9** - Binary Search and Duplicate Keys
 - [x] **Part 10** - Splitting a Leaf Node
-- [ ] **Part 11** - Recursively Searching the B-Tree
-- [ ] **Part 12** - Scanning a Multi-Level B-Tree
-- [ ] **Part 13** - Updating Parent Node After a Split
+- [x] **Part 11** - Recursively Searching the B-Tree
+- [x] **Part 12** - Scanning a Multi-Level B-Tree
+- [x] **Part 13** - Updating Parent Node After a Split
 - [ ] **Part 14** - Splitting Internal Nodes
 - [ ] **Part 15** - Where to go next
 
