@@ -24,6 +24,8 @@ pub struct TablespaceHeader {
     pub table_n_recs: u32,
     /// First page number.
     pub page_first: u32,
+    /// Number of the root page
+    pub root_page_num: u32,
 }
 
 #[derive(Encode, Decode, Debug)]
@@ -82,7 +84,6 @@ pub struct Table {
     pub name: String,
     pub path: PathBuf,
     pub database: String,
-    // pub num_rows: u32,
     pub root_page_num: u32,
     pub pager: Pager,
     pub schema: TableSchema,
@@ -96,9 +97,7 @@ pub struct Pager {
 impl Pager {
     pub fn new(row_size: u32) -> Self {
         let pages: heapless::Vec<Arc<Mutex<Node>>, TABLE_MAX_PAGES> = heapless::Vec::new();
-        let mut p = Pager { pages, row_size };
-        p.try_create(0);
-        p
+        Pager { pages, row_size }
     }
 
     pub fn push(&mut self, node: Node) {
@@ -158,6 +157,17 @@ impl Pager {
     pub fn get_unused_page_num(&self) -> usize {
         self.pages.len()
     }
+
+    pub fn table_n_recs(&self) -> Result<u32, Error> {
+        let mut total = 0;
+        for i in 0..self.pages.len() {
+            let node = self.get(i as u32)?;
+            if node.get_node_type()? == NodeType::NodeLeaf {
+                total += node.leaf_node_num_cells()?;
+            }
+        }
+        Ok(total)
+    }
 }
 
 impl Table {
@@ -168,9 +178,9 @@ impl Table {
             .open(&self.path)?;
 
         let tablespace_header: [u8; TABLESPACE_HEADER_SIZE] = encode_header(&TablespaceHeader {
-            //  table_n_recs: self.num_rows,
-            table_n_recs: 0,
             page_first: 0,
+            table_n_recs: self.pager.table_n_recs()?,
+            root_page_num: self.root_page_num,
         })?;
         file.write_all(&tablespace_header)?;
 
@@ -699,9 +709,8 @@ pub fn load_table(database: &String, name: &String) -> Result<Table, Error> {
     let mut file = std::fs::File::open(&path)?;
 
     let mut tablespace_header_buf = [0u8; TABLESPACE_HEADER_SIZE];
-    file.read_exact(&mut tablespace_header_buf);
+    file.read_exact(&mut tablespace_header_buf)?;
     let tablespace_header: TablespaceHeader = decode_header(&tablespace_header_buf)?;
-    let root_page_num = 0;
 
     loop {
         let mut page_header_buf = [0u8; PAGE_HEADER_SIZE];
@@ -720,12 +729,19 @@ pub fn load_table(database: &String, name: &String) -> Result<Table, Error> {
         pager.push(node);
     }
 
+    debug!(
+        database,
+        name,
+        root_page_num = tablespace_header.root_page_num,
+        "Loaded table."
+    );
+
     let table = Table {
         name: name.clone(),
-        path: path,
+        path,
         database: database.clone(),
-        root_page_num: root_page_num,
-        pager: pager,
+        root_page_num: tablespace_header.root_page_num,
+        pager,
         schema: SCHEMA.clone(),
     };
     Ok(table)
@@ -734,7 +750,8 @@ pub fn load_table(database: &String, name: &String) -> Result<Table, Error> {
 pub fn create_table(database: &String, name: &String) -> Result<Table, Error> {
     let root_page_num = 0;
     let row_size = SCHEMA.get_row_size();
-    let pager = Pager::new(row_size as u32);
+    let mut pager = Pager::new(row_size as u32);
+    pager.try_create(0)?;
 
     let path = PathBuf::from(format!("data/{}/{}.tbd", database, name));
     if path.exists() {
@@ -748,9 +765,9 @@ pub fn create_table(database: &String, name: &String) -> Result<Table, Error> {
     let table = Table {
         name: name.clone(),
         database: database.clone(),
-        path: path,
-        root_page_num: root_page_num,
-        pager: pager,
+        path,
+        root_page_num,
+        pager,
         schema: SCHEMA.clone(),
     };
     Ok(table)

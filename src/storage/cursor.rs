@@ -80,6 +80,10 @@ impl<'a> Cursor<'a> {
     pub fn start(table: &'a mut table::Table) -> Result<Self, Error> {
         let mut cursor = Cursor::find(table, 0)?;
 
+        debug!(
+            page_num = cursor.page_num,
+            "Created cursor on start of the table."
+        );
         let num_cells = cursor
             .table
             .pager
@@ -121,9 +125,8 @@ impl<'a> Cursor<'a> {
     /// # Returns
     /// A new `Cursor` positioned to a given key
     pub fn find(table: &'a mut table::Table, key: u32) -> Result<Self, Error> {
-        debug!(key, "Searching for a cursor position...");
-
         let page_num = table.root_page_num;
+        debug!(key, page_num, "Searching for a cursor position...");
         let root_node_type = table.pager.get(page_num)?.get_node_type()?;
 
         match root_node_type {
@@ -188,7 +191,15 @@ impl<'a> Cursor<'a> {
 
         self.cell_num += 1;
         if self.cell_num >= node.leaf_node_num_cells()? {
-            self.end_of_table = true;
+            // Advance to next leaf node
+            let next_page_num = node.leaf_node_next_leaf()?;
+            if next_page_num == 0 {
+                // This was rightmost leaf
+                self.end_of_table = true;
+            } else {
+                self.page_num = next_page_num;
+                self.cell_num = 0
+            }
         }
         Ok(())
     }
