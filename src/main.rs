@@ -106,13 +106,13 @@ mod tests {
             "insert into users (id, username, email) values (9, 'user9', 'person9@example.com');",
             "insert into users (id, username, email) values (3, 'user3', 'person3@example.com');",
             "insert into users (id, username, email) values (12, 'user12', 'person12@example.com');",
-            //"insert into users (id, username, email) values (27, 'user27', 'person27@example.com');",
-            // "insert into users (id, username, email) values (17, 'user17', 'person17@example.com');",
-            // "insert into users (id, username, email) values (16, 'user16', 'person16@example.com');",
-            // "insert into users (id, username, email) values (13, 'user13', 'person13@example.com');",
-            // "insert into users (id, username, email) values (24, 'user24', 'person24@example.com');",
-            // "insert into users (id, username, email) values (25, 'user25', 'person25@example.com');",
-            // "insert into users (id, username, email) values (28, 'user28', 'person28@example.com');",
+            "insert into users (id, username, email) values (27, 'user27', 'person27@example.com');",
+            "insert into users (id, username, email) values (17, 'user17', 'person17@example.com');",
+            "insert into users (id, username, email) values (16, 'user16', 'person16@example.com');",
+            "insert into users (id, username, email) values (13, 'user13', 'person13@example.com');",
+            "insert into users (id, username, email) values (24, 'user24', 'person24@example.com');",
+            "insert into users (id, username, email) values (25, 'user25', 'person25@example.com');",
+            "insert into users (id, username, email) values (28, 'user28', 'person28@example.com');",
         ];
 
         for c in commands {

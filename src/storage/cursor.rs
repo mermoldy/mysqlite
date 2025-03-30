@@ -121,12 +121,10 @@ impl<'a> Cursor<'a> {
     /// # Returns
     /// A new `Cursor` positioned to a given key
     pub fn find(table: &'a mut table::Table, key: u32) -> Result<Self, Error> {
-        debug!("Searching for a cursor position for {}", key);
+        debug!(key, "Searching for a cursor position...");
 
         let page_num = table.root_page_num;
-        let root_node = table.pager.get(table.root_page_num)?;
-        let root_node_type = root_node.get_node_type()?;
-        drop(root_node);
+        let root_node_type = table.pager.get(page_num)?.get_node_type()?;
 
         match root_node_type {
             NodeType::NodeLeaf => Cursor::leaf_node_find(table, page_num, key),
@@ -159,20 +157,20 @@ impl<'a> Cursor<'a> {
         page_num: u32,
         key: u32,
     ) -> Result<Self, Error> {
+        trace!(page_num, key, "Searching for a position on internal node");
+
+        let child_num = {
+            let node = table.pager.get(page_num)?;
+            let child_index = node.internal_node_find_child(key)?;
+            node.internal_node_child(child_index)?
+        };
+
+        let child_node_type = table.pager.get(child_num)?.get_node_type()?;
         trace!(
-            page_num,
-            "Searching for a position for {} on an internal node",
-            key
+            child_node_type = child_node_type.to_string(),
+            child_num,
+            "Found child node"
         );
-        let node = table.pager.get(page_num)?;
-        let child_num = node.internal_node_find(key)?;
-        drop(node);
-
-        trace!(child_num, "Found child node");
-        let child = table.pager.get(child_num)?;
-        let child_node_type = child.get_node_type()?;
-        drop(child);
-
         match child_node_type {
             NodeType::NodeLeaf => Cursor::leaf_node_find(table, child_num, key),
             NodeType::NodeInternal => Cursor::internal_node_find(table, child_num, key),

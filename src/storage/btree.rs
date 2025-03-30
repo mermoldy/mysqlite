@@ -44,7 +44,9 @@
 //!
 use super::table::PAGE_SIZE;
 use crate::errors::Error;
-use tracing::trace;
+use std::cmp::Ordering;
+use std::fmt;
+use tracing::field::{self, Visit};
 
 /// Represents the type of a B-tree node.
 ///
@@ -113,6 +115,7 @@ const LEAF_NODE_HEADER_SIZE: usize =
 
 // Keep it small for testing.
 pub const INTERNAL_NODE_MAX_CELLS: usize = 3;
+pub const INVALID_PAGE_NUM: u32 = u32::MAX;
 
 // Leaf Node Body Layout
 
@@ -173,16 +176,16 @@ const INTERNAL_NODE_CHILD_SIZE: usize = std::mem::size_of::<u32>();
 /// of cells, each containing a key and a value.
 #[derive(Debug)]
 pub struct Node {
-    pub data: [u8; PAGE_SIZE],   // Owned data buffer
-    leaf_node_value_size: usize, // Size of the value in each cell
-    leaf_node_cell_size: usize,  // Total size of a cell (key + value)
-    leaf_node_max_cells: usize,  // Maximum number of cells that fit in the node
+    pub data: [u8; PAGE_SIZE],       // Owned data buffer
+    pub leaf_node_value_size: usize, // Size of the value in each cell
+    pub leaf_node_cell_size: usize,  // Total size of a cell (key + value)
+    pub leaf_node_max_cells: usize,  // Maximum number of cells that fit in the node
 }
 
 impl Node {
     /// Creates a new `Node` from a byte array, copying the data.
     ///
-    /// Initializes the node with a given row size (value size), computing the cell size and maximum
+    /// Initializes the node with a specified row size (value size), computing the cell size and maximum
     /// number of cells based on the buffer layout.
     ///
     /// # Arguments
@@ -193,7 +196,7 @@ impl Node {
     /// ```
     /// let buffer = [0u8; PAGE_SIZE];
     /// let node = Node::new(&buffer, 256);
-    /// assert_eq!(node.value_size, 256);
+    /// assert_eq!(node.value_size(), 256);
     /// ```
     pub fn new(buf: &[u8; PAGE_SIZE], row_size: usize) -> Self {
         let mut data = [0u8; PAGE_SIZE];
@@ -203,7 +206,7 @@ impl Node {
         let leaf_node_cell_size = LEAF_NODE_KEY_SIZE + leaf_node_value_size;
         let leaf_node_max_cells = LEAF_NODE_SPACE_FOR_CELLS / leaf_node_cell_size;
 
-        Node {
+        Self {
             data,
             leaf_node_value_size,
             leaf_node_cell_size,
@@ -211,288 +214,233 @@ impl Node {
         }
     }
 
-    /// Reads the number of cells stored in the node.
+    /// Returns the number of cells stored in the leaf node.
     ///
-    /// The value is stored in little-endian format at `LEAF_NODE_NUM_CELLS_OFFSET`.
+    /// Reads the value in little-endian format from `LEAF_NODE_NUM_CELLS_OFFSET`.
     ///
     /// # Errors
-    /// Returns an `Error::Storage` if the byte slice cannot be decoded into a `u32`.
+    /// Returns `Error::Storage` if the data cannot be decoded into a `u32`.
     pub fn leaf_node_num_cells(&self) -> Result<u32, Error> {
-        let bytes = &self.data
-            [LEAF_NODE_NUM_CELLS_OFFSET..LEAF_NODE_NUM_CELLS_OFFSET + LEAF_NODE_NUM_CELLS_SIZE];
-        let num_cells = u32::from_le_bytes(
-            bytes
-                .try_into()
-                .map_err(|e| err!(Storage, "Failed to decode num_cells: {:?}", e))?,
-        );
-        Ok(num_cells)
+        let bytes = self.slice_at(LEAF_NODE_NUM_CELLS_OFFSET, LEAF_NODE_NUM_CELLS_SIZE)?;
+        Ok(u32::from_le_bytes(bytes.try_into().map_err(|e| {
+            err!(Storage, "Failed to decode num_cells: {:?}", e)
+        })?))
     }
 
-    /// Writes the number of cells to the node.
+    /// Sets the number of cells in the leaf node.
     ///
-    /// Stores the value in little-endian format at `LEAF_NODE_NUM_CELLS_OFFSET`.
-    pub fn set_leaf_node_num_cells(&mut self, num: u32) -> Result<(), Error> {
-        let bytes = &mut self.data
-            [LEAF_NODE_NUM_CELLS_OFFSET..LEAF_NODE_NUM_CELLS_OFFSET + LEAF_NODE_NUM_CELLS_SIZE];
-        bytes.copy_from_slice(&num.to_le_bytes());
-        Ok(())
+    /// Writes the value in little-endian format to `LEAF_NODE_NUM_CELLS_OFFSET`.
+    ///
+    /// # Arguments
+    /// - `num`: The number of cells to set.
+    pub fn set_leaf_node_num_cells(&mut self, num: u32) {
+        self.data
+            [LEAF_NODE_NUM_CELLS_OFFSET..LEAF_NODE_NUM_CELLS_OFFSET + LEAF_NODE_NUM_CELLS_SIZE]
+            .copy_from_slice(&num.to_le_bytes());
     }
 
     /// Computes the offset of a cell in the data buffer.
     ///
     /// # Arguments
-    /// - `cell_num`: The index of the cell to locate.
+    /// - `cell_num`: The index of the cell (0-based).
     ///
     /// # Errors
-    /// Returns an `Error::Storage` if `cell_num` exceeds `max_cells` or if the resulting offset
-    /// exceeds the buffer size.
+    /// Returns `Error::Storage` if `cell_num` exceeds `max_cells` or the offset exceeds the buffer size.
     fn get_leaf_node_cell_offset(&self, cell_num: usize) -> Result<usize, Error> {
         if cell_num >= self.leaf_node_max_cells {
-            return Err(Error::Storage(format!(
-                "Cell number out of bounds (cell_num={}, max_cells={})",
-                cell_num, self.leaf_node_max_cells
-            )));
+            return Err(err!(
+                Storage,
+                "Cell index {} exceeds max_cells {}",
+                cell_num,
+                self.leaf_node_max_cells
+            ));
         }
-
         let offset = LEAF_NODE_HEADER_SIZE + cell_num * self.leaf_node_cell_size;
         if offset + self.leaf_node_cell_size > self.data.len() {
-            return Err(Error::Storage(format!(
-                "Cell offset exceeds buffer size (offset={}, buffer={})",
+            return Err(err!(
+                Storage,
+                "Cell offset {} exceeds buffer size {}",
                 offset + self.leaf_node_cell_size,
                 self.data.len()
-            )));
+            ));
         }
         Ok(offset)
     }
 
-    /// Returns an immutable reference to the specified cell’s memory.
+    /// Returns an immutable reference to the specified leaf node cell’s memory.
     ///
     /// # Arguments
-    /// - `cell_num`: The index of the cell to read.
+    /// - `cell_num`: The index of the cell (0-based).
     ///
     /// # Errors
-    /// Returns an `Error::Storage` if the cell index is out of bounds or the offset exceeds the buffer.
+    /// Returns `Error::Storage` if the cell index or offset is invalid.
     pub fn leaf_node_cell(&self, cell_num: usize) -> Result<&[u8], Error> {
         let offset = self.get_leaf_node_cell_offset(cell_num)?;
         Ok(&self.data[offset..offset + self.leaf_node_cell_size])
     }
 
-    /// Returns a mutable reference to the specified cell’s memory.
+    /// Returns a mutable reference to the specified leaf node cell’s memory.
     ///
     /// # Arguments
-    /// - `cell_num`: The index of the cell to access.
+    /// - `cell_num`: The index of the cell (0-based).
     ///
     /// # Errors
-    /// Returns an `Error::Storage` if the cell index is out of bounds or the offset exceeds the buffer.
+    /// Returns `Error::Storage` if the cell index or offset is invalid.
     pub fn leaf_node_cell_mut(&mut self, cell_num: usize) -> Result<&mut [u8], Error> {
         let offset = self.get_leaf_node_cell_offset(cell_num)?;
         Ok(&mut self.data[offset..offset + self.leaf_node_cell_size])
     }
 
-    /// Returns an immutable reference to the value of the specified cell.
+    /// Returns an immutable reference to the value of the specified leaf node cell.
     ///
     /// The value follows the key in the cell layout.
     ///
     /// # Arguments
-    /// - `cell_num`: The index of the cell whose value to read.
+    /// - `cell_num`: The index of the cell (0-based).
     ///
     /// # Errors
-    /// Returns an `Error::Storage` if the cell index is invalid or the value offset is out of bounds.
+    /// Returns `Error::Storage` if the cell index or value offset is invalid.
     pub fn leaf_node_value(&self, cell_num: usize) -> Result<&[u8], Error> {
         let cell = self.leaf_node_cell(cell_num)?;
         let offset = LEAF_NODE_KEY_SIZE;
         if offset + self.leaf_node_value_size > cell.len() {
-            return Err(Error::Storage(format!(
-                "Value offset exceeds cell size (offset={}, cell_size={})",
+            return Err(err!(
+                Storage,
+                "Value offset {} exceeds cell size {}",
                 offset + self.leaf_node_value_size,
                 cell.len()
-            )));
+            ));
         }
         Ok(&cell[offset..offset + self.leaf_node_value_size])
     }
 
-    /// Writes a value to the specified cell.
+    /// Sets the value of the specified leaf node cell.
     ///
     /// # Arguments
-    /// - `cell_num`: The index of the cell to write to.
-    /// - `buf`: The byte slice containing the value to write (must match `value_size`).
+    /// - `cell_num`: The index of the cell (0-based).
+    /// - `buf`: The value to write; its length must match `value_size()`.
     ///
     /// # Errors
-    /// Returns an `Error::Storage` if the cell index is invalid or if `buf` length doesn’t match `value_size`.
+    /// Returns `Error::Storage` if the cell index is invalid or `buf.len()` doesn’t match `value_size()`.
     pub fn set_leaf_node_value(&mut self, cell_num: usize, buf: &[u8]) -> Result<(), Error> {
-        let value_size = self.leaf_node_value_size;
-
-        if buf.len() != value_size {
-            return Err(Error::Storage(format!(
-                "Value size mismatch (expected={}, got={})",
-                value_size,
+        let size = self.leaf_node_value_size;
+        if buf.len() != size {
+            return Err(err!(
+                Storage,
+                "Value size mismatch (expected {}, got {})",
+                size,
                 buf.len()
-            )));
+            ));
         }
         let cell = self.leaf_node_cell_mut(cell_num)?;
         let offset = LEAF_NODE_KEY_SIZE;
-        if offset + value_size > cell.len() {
-            return Err(Error::Storage(format!(
-                "Value offset exceeds cell size (offset={}, cell_size={})",
-                offset + value_size,
-                cell.len()
-            )));
-        }
-        cell[offset..offset + value_size].copy_from_slice(buf);
+        cell[offset..offset + size].copy_from_slice(buf);
         Ok(())
     }
 
-    /// Reads the key of the specified cell as a `u32`.
+    /// Returns the key of the specified leaf node cell as a `u32`.
     ///
     /// The key is stored in little-endian format at the start of the cell.
     ///
     /// # Arguments
-    /// - `cell_num`: The index of the cell whose key to read.
+    /// - `cell_num`: The index of the cell (0-based).
     ///
     /// # Errors
-    /// Returns an `Error::Storage` if the cell index is invalid or the key bytes cannot be decoded.
+    /// Returns `Error::Storage` if the cell index is invalid or the key cannot be decoded.
     pub fn leaf_node_key(&self, cell_num: usize) -> Result<u32, Error> {
         let cell = self.leaf_node_cell(cell_num)?;
-        if cell.len() < LEAF_NODE_KEY_SIZE {
-            return Err(Error::Storage(format!(
-                "Cell too small for key (size={}, required={})",
-                cell.len(),
-                LEAF_NODE_KEY_SIZE
-            )));
-        }
-        let bytes: [u8; LEAF_NODE_KEY_SIZE] = cell[..LEAF_NODE_KEY_SIZE]
+        let bytes = cell[..LEAF_NODE_KEY_SIZE]
             .try_into()
             .map_err(|e| err!(Storage, "Failed to decode key: {:?}", e))?;
         Ok(u32::from_le_bytes(bytes))
     }
 
-    /// Writes a key to the specified cell.
+    /// Sets the key of the specified leaf node cell.
     ///
     /// The key is stored in little-endian format at the start of the cell.
     ///
     /// # Arguments
-    /// - `cell_num`: The index of the cell to write to.
-    /// - `key`: The `u32` key value to write.
+    /// - `cell_num`: The index of the cell (0-based).
+    /// - `key`: The key value to write.
     ///
     /// # Errors
-    /// Returns an `Error::Storage` if the cell index is invalid.
+    /// Returns `Error::Storage` if the cell index is invalid.
     pub fn set_leaf_node_key(&mut self, cell_num: usize, key: u32) -> Result<(), Error> {
         let cell = self.leaf_node_cell_mut(cell_num)?;
-        if cell.len() < LEAF_NODE_KEY_SIZE {
-            return Err(Error::Storage(format!(
-                "Cell too small for key (size={}, required={})",
-                cell.len(),
-                LEAF_NODE_KEY_SIZE
-            )));
-        }
         cell[..LEAF_NODE_KEY_SIZE].copy_from_slice(&key.to_le_bytes());
         Ok(())
     }
 
-    /// Returns a reference to the raw data buffer.
+    /// Returns an immutable reference to the raw data buffer.
     ///
-    /// Useful for serialization or debugging purposes.
+    /// Useful for serialization or debugging.
     pub fn as_slice(&self) -> &[u8] {
         &self.data
     }
 
-    /// Returns the maximum number of cells this node can hold.
+    /// Returns the maximum number of cells this leaf node can hold.
     pub fn max_cells(&self) -> usize {
         self.leaf_node_max_cells
     }
 
-    /// Returns the cell size if this node.
+    /// Returns the size of each cell in this leaf node (key + value).
     pub fn cell_size(&self) -> usize {
         self.leaf_node_cell_size
     }
 
-    /// Retrieves the type of the node from its data buffer.
+    /// Returns the size of the value portion in each leaf node cell.
+    pub fn value_size(&self) -> usize {
+        self.leaf_node_value_size
+    }
+
+    /// Returns the node type (leaf or internal).
     ///
-    /// Reads a single byte at `NODE_TYPE_OFFSET` and interprets it as a `NodeType`.
-    /// The byte is expected to be in little-endian format, where:
-    /// - `0` represents a `NodeLeaf`.
-    /// - `1` represents a `NodeInternal`.
+    /// Reads a single byte at `NODE_TYPE_OFFSET`:
+    /// - `0` indicates `NodeType::NodeLeaf`.
+    /// - `1` indicates `NodeType::NodeInternal`.
     ///
     /// # Errors
-    /// Returns an `Error::Storage` if:
-    /// - The byte slice at `NODE_TYPE_OFFSET` cannot be decoded into a `u8` (e.g., out of bounds).
-    /// - The decoded value does not correspond to a valid `NodeType` (i.e., neither 0 nor 1).
+    /// Returns `Error::Storage` if the type cannot be decoded or is invalid.
     pub fn get_node_type(&self) -> Result<NodeType, Error> {
-        // Ensure the buffer has enough space for the node type
-        if NODE_TYPE_OFFSET + NODE_TYPE_SIZE > self.data.len() {
-            return Err(err!(
-                Storage,
-                "Node type offset exceeds buffer size (offset={}, buffer={})",
-                NODE_TYPE_OFFSET + NODE_TYPE_SIZE,
-                self.data.len()
-            ));
-        }
-
-        let bytes = &self.data[NODE_TYPE_OFFSET..NODE_TYPE_OFFSET + NODE_TYPE_SIZE];
-        let node_type = u8::from_le_bytes(
+        let bytes = self.slice_at(NODE_TYPE_OFFSET, NODE_TYPE_SIZE)?;
+        let value = u8::from_le_bytes(
             bytes
                 .try_into()
                 .map_err(|e| err!(Storage, "Failed to decode node type: {:?}", e))?,
         );
-
-        match node_type {
+        match value {
             0 => Ok(NodeType::NodeLeaf),
             1 => Ok(NodeType::NodeInternal),
-            invalid => Err(err!(Storage, "Invalid node type value: {}", invalid)),
+            invalid => Err(err!(Storage, "Invalid node type: {}", invalid)),
         }
     }
 
-    /// Sets the type of the node in its data buffer.
+    /// Sets the node type (leaf or internal).
     ///
-    /// Writes a single byte at `NODE_TYPE_OFFSET` in little-endian format, where:
-    /// - `0` represents a `NodeLeaf`.
-    /// - `1` represents a `NodeInternal`.
+    /// Writes a single byte at `NODE_TYPE_OFFSET`:
+    /// - `0` for `NodeType::NodeLeaf`.
+    /// - `1` for `NodeType::NodeInternal`.
     ///
     /// # Arguments
-    /// - `node_type`: The `NodeType` to set.
-    ///
-    /// # Panics
-    /// Panics if the buffer is too small to store the node type at `NODE_TYPE_OFFSET`.
-    /// This should never occur given the fixed-size `[u8; PAGE_SIZE]` buffer.
-    pub fn set_node_type(&mut self, node_type: NodeType) -> Result<(), Error> {
-        // Ensure the buffer has enough space for the node type
-        if NODE_TYPE_OFFSET + NODE_TYPE_SIZE > self.data.len() {
-            return Err(err!(
-                Storage,
-                "Node type offset exceeds buffer size (offset={}, buffer={})",
-                NODE_TYPE_OFFSET + NODE_TYPE_SIZE,
-                self.data.len()
-            ));
-        }
-
+    /// - `node_type`: The type to set.
+    pub fn set_node_type(&mut self, node_type: NodeType) {
         let value = match node_type {
             NodeType::NodeLeaf => 0,
             NodeType::NodeInternal => 1,
         };
-        self.data[NODE_TYPE_OFFSET..NODE_TYPE_OFFSET + NODE_TYPE_SIZE].copy_from_slice(&[value]);
-        Ok(())
+        self.data[NODE_TYPE_OFFSET] = value;
     }
 
-    /// Checks if the node is the root of the B-tree.
+    /// Checks if this node is the root of the B-tree.
     ///
-    /// Reads a single byte at `IS_ROOT_OFFSET`, interpreting it as a boolean flag:
-    /// - `1` indicates the node is the root.
-    /// - `0` indicates it is not the root.
+    /// Reads a single byte at `IS_ROOT_OFFSET`:
+    /// - `1` indicates it is the root.
+    /// - `0` indicates it is not.
     ///
     /// # Errors
-    /// Returns an `Error::Storage` if the byte slice cannot be read or decoded.
+    /// Returns `Error::Storage` if the flag cannot be decoded.
     pub fn is_node_root(&self) -> Result<bool, Error> {
-        // Ensure the buffer has enough space
-        if IS_ROOT_OFFSET + IS_ROOT_SIZE > self.data.len() {
-            return Err(err!(
-                Storage,
-                "Root flag offset exceeds buffer size (offset={}, buffer={})",
-                IS_ROOT_OFFSET + IS_ROOT_SIZE,
-                self.data.len()
-            ));
-        }
-
-        let bytes = &self.data[IS_ROOT_OFFSET..IS_ROOT_OFFSET + IS_ROOT_SIZE];
+        let bytes = self.slice_at(IS_ROOT_OFFSET, IS_ROOT_SIZE)?;
         let value = u8::from_le_bytes(
             bytes
                 .try_into()
@@ -501,466 +449,397 @@ impl Node {
         Ok(value == 1)
     }
 
-    /// Sets whether the node is the root of the B-tree.
+    /// Sets whether this node is the root of the B-tree.
     ///
     /// Writes a single byte at `IS_ROOT_OFFSET`:
     /// - `1` if `is_root` is `true`.
     /// - `0` if `is_root` is `false`.
     ///
     /// # Arguments
-    /// - `is_root`: `true` if the node is the root, `false` otherwise.
-    ///
-    /// # Errors
-    /// Returns an `Error::Storage` if the buffer is too small to write the flag.
-    pub fn set_node_root(&mut self, is_root: bool) -> Result<(), Error> {
-        // Ensure the buffer has enough space
-        if IS_ROOT_OFFSET + IS_ROOT_SIZE > self.data.len() {
-            return Err(err!(
-                Storage,
-                "Root flag offset exceeds buffer size (offset={}, buffer={})",
-                IS_ROOT_OFFSET + IS_ROOT_SIZE,
-                self.data.len()
-            ));
-        }
-
-        let value = is_root as u8; // true -> 1, false -> 0
-        self.data[IS_ROOT_OFFSET..IS_ROOT_OFFSET + IS_ROOT_SIZE].copy_from_slice(&[value]);
-        Ok(())
+    /// - `is_root`: Whether this node is the root.
+    pub fn set_node_root(&mut self, is_root: bool) {
+        self.data[IS_ROOT_OFFSET] = is_root as u8;
     }
 
-    /// Reads the number of keys stored in the internal node.
+    /// Returns the number of keys in this internal node.
     ///
-    /// The value is stored in little-endian format at `INTERNAL_NODE_NUM_KEYS_OFFSET`.
+    /// Reads the value in little-endian format from `INTERNAL_NODE_NUM_KEYS_OFFSET`.
     ///
     /// # Errors
-    /// Returns an `Error::Storage` if the byte slice cannot be decoded into a `u32`.
+    /// Returns `Error::Storage` if the data cannot be decoded into a `u32`.
     pub fn internal_node_num_keys(&self) -> Result<u32, Error> {
-        if INTERNAL_NODE_NUM_KEYS_OFFSET + INTERNAL_NODE_NUM_KEYS_SIZE > self.data.len() {
-            return Err(err!(
-                Storage,
-                "Num keys offset exceeds buffer size (offset={}, buffer={})",
-                INTERNAL_NODE_NUM_KEYS_OFFSET + INTERNAL_NODE_NUM_KEYS_SIZE,
-                self.data.len()
-            ));
-        }
-        let bytes = &self.data[INTERNAL_NODE_NUM_KEYS_OFFSET
-            ..INTERNAL_NODE_NUM_KEYS_OFFSET + INTERNAL_NODE_NUM_KEYS_SIZE];
+        let bytes = self.slice_at(INTERNAL_NODE_NUM_KEYS_OFFSET, INTERNAL_NODE_NUM_KEYS_SIZE)?;
         Ok(u32::from_le_bytes(bytes.try_into().map_err(|e| {
             err!(Storage, "Failed to decode num_keys: {:?}", e)
         })?))
     }
 
-    /// Sets the number of keys in the internal node.
+    /// Sets the number of keys in this internal node.
     ///
-    /// Writes the value in little-endian format at `INTERNAL_NODE_NUM_KEYS_OFFSET`.
+    /// Writes the value in little-endian format to `INTERNAL_NODE_NUM_KEYS_OFFSET`.
     ///
-    /// # Errors
-    /// Returns an `Error::Storage` if the buffer is too small.
-    pub fn set_internal_node_num_keys(&mut self, num_keys: u32) -> Result<(), Error> {
-        if INTERNAL_NODE_NUM_KEYS_OFFSET + INTERNAL_NODE_NUM_KEYS_SIZE > self.data.len() {
-            return Err(err!(
-                Storage,
-                "Num keys offset exceeds buffer size (offset={}, buffer={})",
-                INTERNAL_NODE_NUM_KEYS_OFFSET + INTERNAL_NODE_NUM_KEYS_SIZE,
-                self.data.len()
-            ));
-        }
+    /// # Arguments
+    /// - `num_keys`: The number of keys to set.
+    pub fn set_internal_node_num_keys(&mut self, num_keys: u32) {
         self.data[INTERNAL_NODE_NUM_KEYS_OFFSET
             ..INTERNAL_NODE_NUM_KEYS_OFFSET + INTERNAL_NODE_NUM_KEYS_SIZE]
             .copy_from_slice(&num_keys.to_le_bytes());
-        Ok(())
     }
 
-    /// Reads the right child pointer of the internal node.
+    /// Returns an immutable reference to the right child pointer of this internal node.
     ///
-    /// Returns a slice containing the `u32` pointer in little-endian format.
+    /// The pointer is stored in little-endian format at `INTERNAL_NODE_RIGHT_CHILD_OFFSET`.
     ///
     /// # Errors
-    /// Returns an `Error::Storage` if the byte slice cannot be accessed.
-    pub fn internal_node_right_child(&self) -> Result<&[u8], Error> {
-        if INTERNAL_NODE_RIGHT_CHILD_OFFSET + INTERNAL_NODE_RIGHT_CHILD_SIZE > self.data.len() {
-            return Err(err!(
-                Storage,
-                "Right child offset exceeds buffer size (offset={}, buffer={})",
-                INTERNAL_NODE_RIGHT_CHILD_OFFSET + INTERNAL_NODE_RIGHT_CHILD_SIZE,
-                self.data.len()
-            ));
-        }
-        Ok(&self.data[INTERNAL_NODE_RIGHT_CHILD_OFFSET
-            ..INTERNAL_NODE_RIGHT_CHILD_OFFSET + INTERNAL_NODE_RIGHT_CHILD_SIZE])
+    /// Returns `Error::Storage` if the slice cannot be accessed.
+    pub fn internal_node_right_child(&self) -> Result<u32, Error> {
+        Ok(u32::from_le_bytes(
+            self.slice_at(
+                INTERNAL_NODE_RIGHT_CHILD_OFFSET,
+                INTERNAL_NODE_RIGHT_CHILD_SIZE,
+            )?
+            .try_into()
+            .map_err(|e| err!(Storage, "Failed to decode right_child_page_num: {:?}", e))?,
+        ))
     }
 
-    /// Reads the right child pointer of the internal node.
-    ///
-    /// Returns a slice containing the `u32` pointer in little-endian format.
+    /// Returns a mutable reference to the right child pointer of this internal node.
     ///
     /// # Errors
-    /// Returns an `Error::Storage` if the byte slice cannot be accessed.
+    /// Returns `Error::Storage` if the slice cannot be accessed.
     pub fn internal_node_right_child_mut(&mut self) -> Result<&mut [u8], Error> {
-        if INTERNAL_NODE_RIGHT_CHILD_OFFSET + INTERNAL_NODE_RIGHT_CHILD_SIZE > self.data.len() {
-            return Err(err!(
-                Storage,
-                "Right child offset exceeds buffer size (offset={}, buffer={})",
-                INTERNAL_NODE_RIGHT_CHILD_OFFSET + INTERNAL_NODE_RIGHT_CHILD_SIZE,
-                self.data.len()
-            ));
-        }
-        Ok(&mut self.data[INTERNAL_NODE_RIGHT_CHILD_OFFSET
-            ..INTERNAL_NODE_RIGHT_CHILD_OFFSET + INTERNAL_NODE_RIGHT_CHILD_SIZE])
+        self.slice_at_mut(
+            INTERNAL_NODE_RIGHT_CHILD_OFFSET,
+            INTERNAL_NODE_RIGHT_CHILD_SIZE,
+        )
     }
 
-    /// Sets the right child pointer of the internal node.
+    /// Sets the right child pointer of this internal node.
     ///
-    /// Writes the value in little-endian format at `INTERNAL_NODE_RIGHT_CHILD_OFFSET`.
+    /// Writes the value in little-endian format to `INTERNAL_NODE_RIGHT_CHILD_OFFSET`.
     ///
-    /// # Errors
-    /// Returns an `Error::Storage` if the buffer is too small.
-    pub fn set_internal_node_right_child(&mut self, right_child: u32) -> Result<(), Error> {
-        if INTERNAL_NODE_RIGHT_CHILD_OFFSET + INTERNAL_NODE_RIGHT_CHILD_SIZE > self.data.len() {
-            return Err(err!(
-                Storage,
-                "Right child offset exceeds buffer size (offset={}, buffer={})",
-                INTERNAL_NODE_RIGHT_CHILD_OFFSET + INTERNAL_NODE_RIGHT_CHILD_SIZE,
-                self.data.len()
-            ));
-        }
+    /// # Arguments
+    /// - `right_child`: The page number of the right child.
+    pub fn set_internal_node_right_child(&mut self, right_child: u32) {
         self.data[INTERNAL_NODE_RIGHT_CHILD_OFFSET
             ..INTERNAL_NODE_RIGHT_CHILD_OFFSET + INTERNAL_NODE_RIGHT_CHILD_SIZE]
             .copy_from_slice(&right_child.to_le_bytes());
+    }
+
+    /// Returns an immutable reference to the specified internal node cell.
+    ///
+    /// Each cell contains a child pointer and a key.
+    ///
+    /// # Arguments
+    /// - `cell_num`: The index of the cell (0-based).
+    ///
+    /// # Errors
+    /// Returns `Error::Storage` if the cell index or offset is invalid.
+    pub fn internal_node_cell(&self, cell_num: u32) -> Result<&[u8], Error> {
+        let offset = INTERNAL_NODE_HEADER_SIZE + (cell_num as usize * INTERNAL_NODE_CELL_SIZE);
+        self.slice_at(offset, INTERNAL_NODE_CELL_SIZE)
+    }
+
+    /// Returns a mutable reference to the specified internal node cell.
+    ///
+    /// Each cell contains a child pointer and a key.
+    ///
+    /// # Arguments
+    /// - `cell_num`: The index of the cell (0-based).
+    ///
+    /// # Errors
+    /// Returns `Error::Storage` if the cell index or offset is invalid.
+    pub fn internal_node_cell_mut(&mut self, cell_num: u32) -> Result<&mut [u8], Error> {
+        let offset = INTERNAL_NODE_HEADER_SIZE + (cell_num as usize * INTERNAL_NODE_CELL_SIZE);
+        self.slice_at_mut(offset, INTERNAL_NODE_CELL_SIZE)
+    }
+
+    /// Returns a mutable reference to the child pointer at the specified index.
+    ///
+    /// If `cell_num` equals the number of keys, returns the right child pointer.
+    ///
+    /// # Arguments
+    /// - `cell_num`: The index of the cell (0-based).
+    ///
+    /// # Errors
+    /// Returns `Error::Storage` if the child index is invalid.
+    pub fn internal_node_child_mut(&mut self, cell_num: u32) -> Result<&mut [u8], Error> {
+        let num_keys = self.internal_node_num_keys()?;
+        if cell_num > num_keys {
+            return Err(err!(
+                Storage,
+                "Cell index {} exceeds num_keys {}",
+                cell_num,
+                num_keys
+            ));
+        }
+        if cell_num == num_keys {
+            self.internal_node_right_child_mut()
+        } else {
+            Ok(&mut self.internal_node_cell_mut(cell_num)?[..INTERNAL_NODE_CHILD_SIZE])
+        }
+    }
+
+    /// Returns the child pointer at the specified index as a `u32`.
+    ///
+    /// # Arguments
+    /// - `child_num`: The index of the child (0-based).
+    ///
+    /// # Errors
+    /// Returns `Error::Storage` if the child index is invalid or the pointer is `INVALID_PAGE_NUM`.
+    pub fn internal_node_child(&self, child_num: u32) -> Result<u32, Error> {
+        let num_keys = self.internal_node_num_keys()?;
+        if child_num > num_keys {
+            return Err(err!(
+                Storage,
+                "Child index {} exceeds num_keys {}",
+                child_num,
+                num_keys
+            ));
+        }
+        let child = if child_num == num_keys {
+            self.internal_node_right_child()?
+        } else {
+            let bytes: [u8; 4] = self.internal_node_cell(child_num)?[..INTERNAL_NODE_CHILD_SIZE]
+                .try_into()
+                .map_err(|e| err!(Storage, "Failed to decode child pointer: {:?}", e))?;
+
+            u32::from_le_bytes(bytes)
+        };
+
+        if child == INVALID_PAGE_NUM {
+            return Err(err!(Storage, "Child {} is invalid page number", child_num));
+        }
+        Ok(child)
+    }
+    pub fn set_internal_node_child(&mut self, cell_num: u32, child_num: u32) -> Result<(), Error> {
+        self.internal_node_child_mut(cell_num)?
+            .copy_from_slice(&child_num.to_le_bytes());
         Ok(())
     }
 
-    /// Reads a cell (child pointer and key) at the specified index.
+    /// Returns the key at the specified index in this internal node.
     ///
     /// # Arguments
-    /// - `cell_num`: The index of the cell to read (0-based).
+    /// - `cell_num`: The index of the cell (0-based).
     ///
     /// # Errors
-    /// Returns an `Error::Storage` if the cell index is out of bounds or the slice cannot be accessed.
-    pub fn internal_node_cell(&self, cell_num: u32) -> Result<&[u8], Error> {
-        let offset = INTERNAL_NODE_HEADER_SIZE + (cell_num as usize * INTERNAL_NODE_CELL_SIZE);
-        if offset + INTERNAL_NODE_CELL_SIZE > self.data.len() {
+    /// Returns `Error::Storage` if the key index or offset is invalid.
+    pub fn internal_node_key(&self, cell_num: u32) -> Result<u32, Error> {
+        let cell = self.internal_node_cell(cell_num)?;
+        let offset = INTERNAL_NODE_CHILD_SIZE;
+        if offset + INTERNAL_NODE_KEY_SIZE > cell.len() {
             return Err(err!(
                 Storage,
-                "Cell offset exceeds buffer size (offset={}, buffer={})",
-                offset + INTERNAL_NODE_CELL_SIZE,
-                self.data.len()
-            ));
-        }
-        Ok(&self.data[offset..offset + INTERNAL_NODE_CELL_SIZE])
-    }
-
-    /// Reads a cell (child pointer and key) at the specified index.
-    ///
-    /// # Arguments
-    /// - `cell_num`: The index of the cell to read (0-based).
-    ///
-    /// # Errors
-    /// Returns an `Error::Storage` if the cell index is out of bounds or the slice cannot be accessed.
-    pub fn internal_node_cell_mut(&mut self, cell_num: u32) -> Result<&mut [u8], Error> {
-        let offset = INTERNAL_NODE_HEADER_SIZE + (cell_num as usize * INTERNAL_NODE_CELL_SIZE);
-        if offset + INTERNAL_NODE_CELL_SIZE > self.data.len() {
-            return Err(err!(
-                Storage,
-                "Cell offset exceeds buffer size (offset={}, buffer={})",
-                offset + INTERNAL_NODE_CELL_SIZE,
-                self.data.len()
-            ));
-        }
-        Ok(&mut self.data[offset..offset + INTERNAL_NODE_CELL_SIZE])
-    }
-    /// Reads a cell (child pointer and key) at the specified index.
-    ///
-    /// # Arguments
-    /// - `cell_num`: The index of the cell to read (0-based).
-    ///
-    /// # Errors
-    /// Returns an `Error::Storage` if the cell index is out of bounds or the slice cannot be accessed.
-    pub fn internal_node_cell_2(&self, cell_num: u32) -> Result<&[u8], Error> {
-        let offset = INTERNAL_NODE_HEADER_SIZE + (cell_num as usize * INTERNAL_NODE_CELL_SIZE);
-        if offset + INTERNAL_NODE_CELL_SIZE > self.data.len() {
-            return Err(err!(
-                Storage,
-                "Cell offset exceeds buffer size (offset={}, buffer={})",
-                offset + INTERNAL_NODE_CELL_SIZE,
-                self.data.len()
-            ));
-        }
-        Ok(&self.data[offset..offset + INTERNAL_NODE_CELL_SIZE])
-    }
-
-    /// Reads the child pointer at the specified index.
-    ///
-    /// If `child_num` equals the number of keys, returns the right child pointer.
-    /// Otherwise, returns the child pointer from the specified cell.
-    ///
-    /// # Errors
-    /// Returns an `Error::Storage` if `child_num` exceeds the number of keys or the slice cannot be accessed.
-    pub fn internal_node_child(&self, child_num: u32) -> Result<&[u8], Error> {
-        let num_keys = self.internal_node_num_keys()?;
-        if child_num > num_keys {
-            return Err(err!(
-                Storage,
-                "Child index {} exceeds num_keys {}",
-                child_num,
-                num_keys
-            ));
-        }
-        if child_num == num_keys {
-            Ok(&self.internal_node_right_child()?[..])
-        } else {
-            Ok(&self.internal_node_cell(child_num)?[..INTERNAL_NODE_CHILD_SIZE])
-        }
-    }
-
-    /// Reads the child pointer at the specified index.
-    ///
-    /// If `child_num` equals the number of keys, returns the right child pointer.
-    /// Otherwise, returns the child pointer from the specified cell.
-    ///
-    /// # Errors
-    /// Returns an `Error::Storage` if `child_num` exceeds the number of keys or the slice cannot be accessed.
-    pub fn internal_node_child_mut(&mut self, child_num: u32) -> Result<&mut [u8], Error> {
-        let num_keys = self.internal_node_num_keys()?;
-        if child_num > num_keys {
-            return Err(err!(
-                Storage,
-                "Child index {} exceeds num_keys {}",
-                child_num,
-                num_keys
-            ));
-        }
-        if child_num == num_keys {
-            Ok(&mut self.internal_node_right_child_mut()?[..])
-        } else {
-            Ok(&mut self.internal_node_cell_mut(child_num)?[..INTERNAL_NODE_CHILD_SIZE])
-        }
-    }
-
-    /// Reads the key at the specified index.
-    ///
-    /// # Errors
-    /// Returns an `Error::Storage` if the key index is out of bounds or the slice cannot be decoded.
-    pub fn internal_node_key(&self, key_num: u32) -> Result<u32, Error> {
-        let num_keys = self.internal_node_num_keys()?;
-        if key_num >= num_keys {
-            return Err(err!(
-                Storage,
-                "Key index {} exceeds num_keys {}",
-                key_num,
-                num_keys
-            ));
-        }
-        let offset = INTERNAL_NODE_HEADER_SIZE
-            + (key_num as usize * INTERNAL_NODE_CELL_SIZE)
-            + INTERNAL_NODE_CHILD_SIZE;
-        if offset + INTERNAL_NODE_KEY_SIZE > self.data.len() {
-            return Err(err!(
-                Storage,
-                "Key offset exceeds buffer size (offset={}, buffer={})",
+                "Key offset {} exceeds cell size {}",
                 offset + INTERNAL_NODE_KEY_SIZE,
-                self.data.len()
+                cell.len()
             ));
         }
-        let bytes = &self.data[offset..offset + INTERNAL_NODE_KEY_SIZE];
+        let bytes = &cell[offset..offset + INTERNAL_NODE_KEY_SIZE];
+
         Ok(u32::from_le_bytes(bytes.try_into().map_err(|e| {
             err!(Storage, "Failed to decode key: {:?}", e)
         })?))
     }
 
-    /// Sets the key at the specified index.
+    /// Sets the key at the specified index in this internal node.
+    ///
+    /// # Arguments
+    /// - `key_num`: The index of the key (0-based).
+    /// - `key_value`: The key value to write.
     ///
     /// # Errors
-    /// Returns an `Error::Storage` if the key index is out of bounds or the buffer is too small.
-    pub fn set_internal_node_key(&mut self, key_num: u32, key_value: u32) -> Result<(), Error> {
-        let num_keys = self.internal_node_num_keys()?;
-        if key_num >= num_keys {
+    /// Returns `Error::Storage` if the key index or offset is invalid.
+    pub fn set_internal_node_key(&mut self, cell_num: u32, key_value: u32) -> Result<(), Error> {
+        let cell = self.internal_node_cell_mut(cell_num)?;
+        let offset = INTERNAL_NODE_CHILD_SIZE;
+        if offset + INTERNAL_NODE_KEY_SIZE > cell.len() {
             return Err(err!(
                 Storage,
-                "Key index {} exceeds num_keys {}",
-                key_num,
-                num_keys
-            ));
-        }
-        let offset = INTERNAL_NODE_HEADER_SIZE
-            + (key_num as usize * INTERNAL_NODE_CELL_SIZE)
-            + INTERNAL_NODE_CHILD_SIZE;
-        if offset + INTERNAL_NODE_KEY_SIZE > self.data.len() {
-            return Err(err!(
-                Storage,
-                "Key offset exceeds buffer size (offset={}, buffer={})",
+                "Key offset {} exceeds cell size {}",
                 offset + INTERNAL_NODE_KEY_SIZE,
-                self.data.len()
+                cell.len()
             ));
         }
-        self.data[offset..offset + INTERNAL_NODE_KEY_SIZE]
-            .copy_from_slice(&key_value.to_le_bytes());
+        cell[offset..offset + INTERNAL_NODE_KEY_SIZE].copy_from_slice(&key_value.to_le_bytes());
         Ok(())
     }
 
+    /// Updates an existing key in this internal node.
+    ///
+    /// Finds the child index associated with `old_key` and replaces it with `new_key`.
+    ///
+    /// # Arguments
+    /// - `old_key`: The key to replace.
+    /// - `new_key`: The new key value.
+    ///
+    /// # Errors
+    /// Returns `Error::Storage` if the key cannot be found or updated.
+    pub fn update_internal_node_key(&mut self, old_key: u32, new_key: u32) -> Result<(), Error> {
+        let old_child_index = self.internal_node_find_child(old_key)?;
+        // let parent_old_child = parent.internal_node_find_child(old_max)?;
+        // parent.set_internal_node_key(parent_old_child, new_max)?;
+        // drop(parent);
+        //
+        self.set_internal_node_key(old_child_index, new_key)
+    }
+
+    /// Returns the maximum key in this node.
+    ///
+    /// For leaf nodes, this is the key of the last cell. For internal nodes, it’s the last key.
+    ///
+    /// # Errors
+    /// Returns `Error::Storage` if the node type or key cannot be accessed.
     pub fn get_node_max_key(&self) -> Result<u32, Error> {
         match self.get_node_type()? {
-            NodeType::NodeInternal => {
-                Ok(self.internal_node_key(self.internal_node_num_keys()? - 1)?)
-            }
-            NodeType::NodeLeaf => {
-                Ok(self.leaf_node_key((self.leaf_node_num_cells()? - 1) as usize)?)
-            }
+            NodeType::NodeInternal => self.internal_node_key(self.internal_node_num_keys()? - 1),
+            NodeType::NodeLeaf => self.leaf_node_key((self.leaf_node_num_cells()? - 1) as usize),
         }
     }
 
-    // Leaf node methods (should ideally be in a separate LeafNode struct)
-    /// Number of cells assigned to the right sibling when splitting a leaf node.
+    /// Returns the number of cells assigned to the right sibling during a leaf node split.
     pub fn leaf_node_right_split_count(&self) -> usize {
         (self.leaf_node_max_cells + 1) / 2
     }
 
-    /// Number of cells assigned to the left sibling when splitting a leaf node.
+    /// Returns the number of cells assigned to the left sibling during a leaf node split.
     pub fn leaf_node_left_split_count(&self) -> usize {
         (self.leaf_node_max_cells + 1) - self.leaf_node_right_split_count()
     }
 
-    /// Maximum number of cells that can fit in a leaf node.
-    pub fn leaf_node_max_cells(&self) -> usize {
-        self.leaf_node_max_cells
-    }
-
-    /// The page number of the leaf’s sibling node on the right. The rightmost leaf node will have a next_leaf value of 0 to denote no sibling
-    pub fn leaf_node_next_leaf(&self) -> Result<u32, Error> {
-        let bytes = &self.data
-            [LEAF_NODE_NEXT_LEAF_OFFSET..LEAF_NODE_NEXT_LEAF_OFFSET + LEAF_NODE_NEXT_LEAF_SIZE];
-        let next_leaf = u32::from_le_bytes(
-            bytes
-                .try_into()
-                .map_err(|e| err!(Storage, "Failed to decode num_cells: {:?}", e))?,
-        );
-        Ok(next_leaf)
-    }
-
-    /// Set the page number of the leaf’s sibling node on the right. The rightmost leaf node will have a next_leaf value of 0 to denote no sibling
-    pub fn set_leaf_node_next_leaf(&mut self, next_leaf: u32) -> Result<(), Error> {
-        self.data
-            [LEAF_NODE_NEXT_LEAF_OFFSET..LEAF_NODE_NEXT_LEAF_OFFSET + LEAF_NODE_NEXT_LEAF_SIZE]
-            .copy_from_slice(next_leaf.to_be_bytes().as_slice());
-        Ok(())
-    }
-
-    pub fn node_parent(&self) -> Result<u32, Error> {
-        let bytes = &self.data[PARENT_POINTER_OFFSET..PARENT_POINTER_OFFSET + PARENT_POINTER_SIZE];
-        let node_parent = u32::from_le_bytes(
-            bytes
-                .try_into()
-                .map_err(|e| err!(Storage, "Failed to decode node_parent: {:?}", e))?,
-        );
-        Ok(node_parent)
-    }
-
-    /// Sets the parent node pointer for this node.
+    /// Returns the page number of the next leaf node sibling.
     ///
-    /// Updates the parent pointer field in the common node header section.
-    /// This establishes the hierarchical relationship between nodes in the B-tree.
-    ///
-    /// # Arguments
-    /// - `node_parent`: The page number (ID) of the parent node.
+    /// A value of `0` indicates no right sibling (e.g., this is the rightmost leaf).
     ///
     /// # Errors
-    /// Returns an `Error::Storage` if unable to set the parent pointer
-    pub fn set_node_parent(&mut self, node_parent: u32) -> Result<(), Error> {
-        self.data[PARENT_POINTER_OFFSET..PARENT_POINTER_OFFSET + PARENT_POINTER_SIZE]
-            .copy_from_slice(node_parent.to_be_bytes().as_slice());
-        Ok(())
+    /// Returns `Error::Storage` if the pointer cannot be decoded.
+    pub fn leaf_node_next_leaf(&self) -> Result<u32, Error> {
+        let bytes = self.slice_at(LEAF_NODE_NEXT_LEAF_OFFSET, LEAF_NODE_NEXT_LEAF_SIZE)?;
+        Ok(u32::from_le_bytes(bytes.try_into().map_err(|e| {
+            err!(Storage, "Failed to decode next_leaf: {:?}", e)
+        })?))
     }
 
+    /// Sets the page number of the next leaf node sibling.
+    ///
+    /// A value of `0` indicates no right sibling.
+    ///
+    /// # Arguments
+    /// - `next_leaf`: The page number of the next leaf sibling.
+    pub fn set_leaf_node_next_leaf(&mut self, next_leaf: u32) {
+        self.data
+            [LEAF_NODE_NEXT_LEAF_OFFSET..LEAF_NODE_NEXT_LEAF_OFFSET + LEAF_NODE_NEXT_LEAF_SIZE]
+            .copy_from_slice(&next_leaf.to_le_bytes());
+    }
+
+    /// Returns the page number of this node’s parent.
+    ///
+    /// # Errors
+    /// Returns `Error::Storage` if the pointer cannot be decoded.
+    pub fn node_parent(&self) -> Result<u32, Error> {
+        let bytes = self.slice_at(PARENT_POINTER_OFFSET, PARENT_POINTER_SIZE)?;
+        Ok(u32::from_le_bytes(bytes.try_into().map_err(|e| {
+            err!(Storage, "Failed to decode parent: {:?}", e)
+        })?))
+    }
+
+    /// Sets the page number of this node’s parent.
+    ///
+    /// # Arguments
+    /// - `parent`: The page number of the parent node.
+    pub fn set_node_parent(&mut self, parent: u32) {
+        self.data[PARENT_POINTER_OFFSET..PARENT_POINTER_OFFSET + PARENT_POINTER_SIZE]
+            .copy_from_slice(&parent.to_le_bytes());
+    }
+
+    /// Finds the insertion position for a key in this leaf node using binary search.
+    ///
+    /// Returns the index where the key should be inserted. If the key exists, returns its index.
+    ///
+    /// # Arguments
+    /// - `key`: The key to find or insert.
+    ///
+    /// # Errors
+    /// Returns `Error::Storage` if the node data cannot be accessed.
     pub fn leaf_node_find(&self, key: u32) -> Result<u32, Error> {
-        trace!("Searching for a position for {} on a leaf node", key);
-
-        let mut cell_num: Option<u32> = None;
-
-        {
-            // let node = table.pager.get(page_num)?;
-
-            let mut min_index = 0;
-            let mut one_past_max_index = self.leaf_node_num_cells()?;
-
-            // Binary search
-            while one_past_max_index != min_index {
-                let index = (min_index + one_past_max_index) / 2;
-                let key_at_index = self.leaf_node_key(index as usize)?;
-                if key == key_at_index {
-                    trace!(index, "found index on a leaf node");
-                    cell_num = Some(index);
-                    break;
-                }
-
-                if key < key_at_index {
-                    one_past_max_index = index;
-                } else {
-                    min_index = index + 1;
-                }
-            }
-
-            if cell_num.is_none() {
-                cell_num = Some(min_index);
-                trace!(
-                    min_index,
-                    "Not found index on a leaf node. Using min index."
-                );
+        let mut min = 0;
+        let mut max = self.leaf_node_num_cells()?;
+        while min < max {
+            let mid = (min + max) / 2;
+            let key_at_mid = self.leaf_node_key(mid as usize)?;
+            match key.cmp(&key_at_mid) {
+                Ordering::Equal => return Ok(mid),
+                Ordering::Less => max = mid,
+                Ordering::Greater => min = mid + 1,
             }
         }
-
-        return Ok(cell_num.unwrap_or(0));
+        Ok(min)
     }
 
-    /// Return the index of the child which should contain the given key.
+    /// Returns the index of the child that should contain the given key in this internal node.
+    ///
+    /// Uses binary search to find the appropriate child pointer.
+    ///
+    /// # Arguments
+    /// - `key`: The key to locate.
+    ///
+    /// # Errors
+    /// Returns `Error::Storage` if the node data cannot be accessed.
     pub fn internal_node_find_child(&self, key: u32) -> Result<u32, Error> {
         let num_keys = self.internal_node_num_keys()?;
-
-        // Binary search
-        let mut min_index = 0;
-        let mut max_index = num_keys; // there is one more child than key
-
-        while min_index != max_index {
-            let index = (min_index + max_index) / 2;
-            let key_to_right = self.internal_node_key(index)?;
-            if key_to_right >= key {
-                max_index = index;
+        let mut min = 0;
+        let mut max = num_keys;
+        while min < max {
+            let mid = (min + max) / 2;
+            let key_at_mid = self.internal_node_key(mid)?;
+            if key <= key_at_mid {
+                max = mid;
             } else {
-                min_index = index + 1;
+                min = mid + 1;
             }
         }
-
-        return Ok(min_index);
+        Ok(min)
     }
 
-    /// This function will perform binary search to find the child that should contain the given
-    /// key. Remember that the key to the right of each child pointer is the maximum key contained
-    /// by that child.
+    /// Returns the child page number that should contain the given key in this internal node.
+    ///
+    /// Uses binary search to locate the child.
+    ///
+    /// # Arguments
+    /// - `key`: The key to find.
+    ///
+    /// # Errors
+    /// Returns `Error::Storage` if the child cannot be accessed.
     pub fn internal_node_find(&self, key: u32) -> Result<u32, Error> {
-        trace!("Searching for a position for {} on an internal node", key);
+        let child_index = self.internal_node_find_child(key)?;
+        self.internal_node_child(child_index)
+    }
 
-        // let mut node = table.pager.get(page_num)?;
+    /// Helper method to safely slice the data buffer immutably.
+    fn slice_at(&self, offset: usize, size: usize) -> Result<&[u8], Error> {
+        if offset + size > self.data.len() {
+            return Err(err!(
+                Storage,
+                "Offset {} exceeds buffer size {}",
+                offset + size,
+                self.data.len()
+            ));
+        }
+        Ok(&self.data[offset..offset + size])
+    }
 
-        let min_index = self.internal_node_find_child(key)?;
-
-        // The children of an internal node can be either leaf
-        // nodes or more internal nodes. After we find the correct child, call
-        // the appropriate search function on it.
-        let child_num_bytes: [u8; 4] = self.internal_node_child(min_index)?.try_into().unwrap();
-        let child_num = u32::from_le_bytes(child_num_bytes);
-
-        Ok(child_num)
-
-        // trace!(child_num, "Found child node");
-        // let child = table.pager.get(child_num)?;
-
-        // let child_node_type = child.get_node_type()?;
-        // drop(child);
-        // drop(node);
-
-        // match child_node_type {
-        //     Node::leaf_node_find(table, child_num, key),
-        //     Node::internal_node_find(table, child_num, key),
-        // }
+    /// Helper method to safely slice the data buffer mutably.
+    fn slice_at_mut(&mut self, offset: usize, size: usize) -> Result<&mut [u8], Error> {
+        if offset + size > self.data.len() {
+            return Err(err!(
+                Storage,
+                "Offset {} exceeds buffer size {}",
+                offset + size,
+                self.data.len()
+            ));
+        }
+        Ok(&mut self.data[offset..offset + size])
     }
 }
 
@@ -971,6 +850,15 @@ impl Clone for Node {
             leaf_node_value_size: self.leaf_node_value_size,
             leaf_node_cell_size: self.leaf_node_cell_size,
             leaf_node_max_cells: self.leaf_node_max_cells,
+        }
+    }
+}
+
+impl fmt::Display for NodeType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            NodeType::NodeLeaf => write!(f, "Leaf"),
+            NodeType::NodeInternal => write!(f, "Internal"),
         }
     }
 }

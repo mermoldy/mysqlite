@@ -109,9 +109,9 @@ impl Pager {
         if page_num >= self.pages.len() as u32 {
             let p: [u8; 4096] = [0; 4096];
             let mut n = btree::Node::new(&p, self.row_size as usize);
-            n.set_node_type(btree::NodeType::NodeLeaf)?;
-            n.set_leaf_node_num_cells(0)?;
-            n.set_node_root(self.pages.len() == 0)?;
+            n.set_node_type(btree::NodeType::NodeLeaf);
+            n.set_leaf_node_num_cells(0);
+            n.set_node_root(self.pages.len() == 0);
             if let Err(_) = self.pages.push(Arc::new(Mutex::new(n))) {}
         }
         Ok(())
@@ -139,6 +139,15 @@ impl Pager {
 
     pub fn len(&self) -> usize {
         self.pages.len()
+    }
+
+    pub fn get_node_max_key(&self, node: &Node) -> Result<u32, Error> {
+        if node.get_node_type()? == NodeType::NodeLeaf {
+            let key = node.leaf_node_key(node.leaf_node_num_cells()? as usize - 1)?;
+            return Ok(key);
+        }
+        let right_child = self.get(node.internal_node_right_child()?)?;
+        return self.get_node_max_key(&right_child);
     }
 
     /// For now, we’re assuming that in a database with N pages, page numbers 0
@@ -199,10 +208,14 @@ impl Table {
     pub fn build_btree(&self) -> Result<(usize, Vec<String>, Vec<Vec<String>>), Error> {
         let total = self.pager.len();
         let columns = vec![
+            "Type".to_string(),
             "Page".to_string(),
             "Index".to_string(),
             "Key".to_string(),
             "Parent".to_string(),
+            "Is root".to_string(),
+            "Capacity".to_string(),
+            "Child".to_string(),
         ];
 
         let mut rows = Vec::new();
@@ -211,16 +224,30 @@ impl Table {
             let num_cells = node.leaf_node_num_cells()?;
 
             for i in 0..num_cells {
-                if node.get_node_type()? == NodeType::NodeInternal {
-                    continue;
-                }
+                let (key, capacity, child) = if node.get_node_type()? == NodeType::NodeInternal {
+                    (
+                        node.internal_node_key(i as u32)?,
+                        node.internal_node_num_keys()?,
+                        node.internal_node_right_child()?,
+                    )
+                } else {
+                    (
+                        node.leaf_node_key(i as usize)?,
+                        node.leaf_node_num_cells()?,
+                        node.internal_node_right_child()?,
+                    )
+                };
+
                 let parent = node.node_parent()?;
-                let key = node.leaf_node_key(i as usize)?;
                 let row = vec![
+                    node.get_node_type()?.to_string(),
                     page_num.to_string(),    // Page number
                     i.to_string(),           // Cell index
                     format!("{:?}", key),    // Key value (debug-formatted)
                     format!("{:?}", parent), // Key value (debug-formatted)
+                    format!("{:?}", node.is_node_root()?),
+                    format!("{:?}", capacity),
+                    format!("{:?}", child),
                 ];
                 rows.push(row);
             }
@@ -256,7 +283,12 @@ pub fn insert_row(table: &mut Table, row: &row::Row) -> Result<(), Error> {
     }
 
     if num_cells as usize >= node.max_cells() {
-        warn!("Node full. Splitting a leaf node...");
+        warn!(
+            page_num = cursor.page_num,
+            num_cells,
+            max_cells = node.max_cells(),
+            "Node full. Splitting a leaf node..."
+        );
         drop(node);
         leaf_node_split_and_insert(&mut cursor, row_id, row_bin.clone())?;
         return Ok(());
@@ -273,7 +305,7 @@ pub fn insert_row(table: &mut Table, row: &row::Row) -> Result<(), Error> {
         }
     }
 
-    node.set_leaf_node_num_cells(num_cells + 1)?;
+    node.set_leaf_node_num_cells(num_cells + 1);
     node.set_leaf_node_key(cursor.cell_num as usize, row_id)?;
     node.set_leaf_node_value(cursor.cell_num as usize, row_bin.as_slice())?;
 
@@ -288,7 +320,7 @@ pub fn leaf_node_split_and_insert(
     row_id: u32,
     row_bin: Vec<u8>,
 ) -> Result<(), Error> {
-    trace!("Splitting leaf node...");
+    debug!("Splitting leaf node...");
     let new_page_num = cursor.table.pager.get_unused_page_num() as u32;
     cursor.table.pager.try_create(new_page_num)?;
 
@@ -297,26 +329,16 @@ pub fn leaf_node_split_and_insert(
     let mut new_node = cursor.table.pager.get(new_page_num)?;
 
     initialize_leaf_node(&mut new_node)?;
-    new_node.set_node_parent(old_node.node_parent()?)?;
+    new_node.set_node_parent(old_node.node_parent()?);
 
     // Whenever we split a leaf node, update the sibling pointers.
     // The old leaf’s sibling becomes the new leaf, and the new leaf’s sibling becomes
     // whatever used to be the old leaf’s sibling.
-    new_node.set_leaf_node_next_leaf(old_node.leaf_node_next_leaf()?)?;
-    old_node.set_leaf_node_next_leaf(new_page_num)?;
+    new_node.set_leaf_node_next_leaf(old_node.leaf_node_next_leaf()?);
+    old_node.set_leaf_node_next_leaf(new_page_num);
 
     let leaf_node_left_split_count = old_node.leaf_node_left_split_count();
-    let leaf_node_max_cells = old_node.leaf_node_max_cells();
-
-    // let insert_node = if cursor.cell_num as usize >= leaf_node_left_split_count {
-    //     &mut new_node
-    // } else {
-    //     &mut old_node
-    // };
-
-    // let insert_node_num_cells = insert_node.leaf_node_num_cells()?;
-    // insert_node.set_leaf_node_num_cells(insert_node_num_cells + 1)?;
-
+    let leaf_node_max_cells = old_node.leaf_node_max_cells;
     let old = old_node.clone();
 
     // All existing keys plus new key should be divided
@@ -324,10 +346,8 @@ pub fn leaf_node_split_and_insert(
     // Starting from the right, move each key to correct position.
     for i in (0..=leaf_node_max_cells).rev() {
         let dest_node = if i >= leaf_node_left_split_count {
-            trace!("select new node");
             &mut new_node
         } else {
-            trace!("select old node");
             &mut old_node
         };
 
@@ -345,8 +365,8 @@ pub fn leaf_node_split_and_insert(
     }
 
     // Update cell count on both leaf nodes
-    old_node.set_leaf_node_num_cells(old.leaf_node_left_split_count() as u32)?;
-    new_node.set_leaf_node_num_cells(old.leaf_node_right_split_count() as u32)?;
+    old_node.set_leaf_node_num_cells(old.leaf_node_left_split_count() as u32);
+    new_node.set_leaf_node_num_cells(old.leaf_node_right_split_count() as u32);
 
     // We need to update the nodes’ parent. If the original node was the root,
     // it had no parent. In that case, create a new root node to act as the parent.
@@ -354,7 +374,7 @@ pub fn leaf_node_split_and_insert(
         drop(old_node);
         drop(new_node);
 
-        create_new_root(cursor.table, new_page_num)?;
+        create_new_root(cursor, new_page_num)?;
         return Ok(());
     } else {
         let parent_page_num = old_node.node_parent()?;
@@ -363,15 +383,152 @@ pub fn leaf_node_split_and_insert(
         drop(old_node);
         drop(new_node);
 
-        let mut parent = cursor.table.pager.get(parent_page_num)?;
-        let parent_old_child_index = parent.internal_node_find_child(old_max)?;
-        parent.set_internal_node_key(parent_old_child_index, new_max)?;
+        {
+            let mut parent = cursor.table.pager.get(parent_page_num)?;
+            parent.update_internal_node_key(old_max, new_max)?;
+        }
 
-        drop(parent);
         internal_node_insert(cursor, parent_page_num, new_page_num)?;
 
         return Ok(());
     }
+}
+
+/// Splits an internal node and inserts a new child pointer into the resulting structure.
+/// This operation is part of maintaining a balanced B-tree when an internal node becomes full.
+///
+/// When splitting an internal node, we perform the following steps:
+/// - Create a sibling node to store `(n-1)/2` of the original node's keys.
+/// - Move these keys and their associated child pointers from the original node to the sibling.
+/// - Update the original node's key in the parent to reflect its new maximum key after the split.
+/// - Insert the sibling node into the parent, which may trigger a recursive split if the parent overflows.
+///
+/// # Arguments
+/// - `cursor`: A mutable reference to the B-tree cursor, used to access and modify the pager.
+/// - `parent_page_num`: The page number of the internal node to split (initially the "old node").
+/// - `child_page_num`: The page number of the child to insert after the split.
+///
+/// # Returns
+/// - `Ok(())` on success, or an `Error` if any operation (e.g., page retrieval or initialization) fails.
+///
+/// # Notes
+/// - If the node being split is the root, a new root is created, and the split nodes become its children.
+/// - Borrowing is carefully managed to ensure immutable borrows are dropped before mutable operations.
+pub fn internal_node_split_and_insert(
+    cursor: &mut cursor::Cursor,
+    parent_page_num: u32,
+    child_page_num: u32,
+) -> Result<(), Error> {
+    debug!(
+        parent_page_num,
+        child_page_num, "Splitting internal node..."
+    );
+
+    let old_page_num = parent_page_num;
+
+    // Precompute all values that require immutable borrows
+    let (old_max, child_max, splitting_root, old_node_parent, old_num_keys, right_child_page_num) = {
+        let old_node = cursor.table.pager.get(old_page_num)?;
+        let child = cursor.table.pager.get(child_page_num)?;
+        (
+            cursor.table.pager.get_node_max_key(&old_node)?,
+            cursor.table.pager.get_node_max_key(&child)?,
+            old_node.is_node_root()?,
+            old_node.node_parent()?,
+            old_node.internal_node_num_keys()?,
+            old_node.internal_node_right_child()?,
+        )
+    };
+    let new_page_num = cursor.table.pager.get_unused_page_num() as u32;
+
+    // Initialize the parent node
+    let parent_id = {
+        if splitting_root {
+            create_new_root(cursor, new_page_num)?;
+            cursor.table.root_page_num
+        } else {
+            let mut new_node = cursor.table.pager.get(new_page_num)?;
+            initialize_internal_node(&mut new_node)?;
+            old_node_parent
+        }
+    };
+
+    // Split the old node and move keys/children
+    {
+        let mut old_node = cursor.table.pager.get(old_page_num)?;
+        let mut current_num_keys = old_num_keys;
+
+        // Move the right child to the new node
+        {
+            let mut cur = cursor.table.pager.get(right_child_page_num)?;
+            cur.set_node_parent(new_page_num);
+        }
+        old_node.set_internal_node_right_child(btree::INVALID_PAGE_NUM);
+
+        // Collect children to move to the new node
+        let mut children_to_move = Vec::new();
+        for i in (btree::INTERNAL_NODE_MAX_CELLS / 2 + 1..btree::INTERNAL_NODE_MAX_CELLS).rev() {
+            let cur_page_num = old_node.internal_node_child(i as u32)?;
+            children_to_move.push(cur_page_num);
+            current_num_keys -= 1;
+            old_node.set_internal_node_num_keys(current_num_keys);
+        }
+
+        // Update the old node's right child
+        let new_right_child = old_node.internal_node_child(current_num_keys - 1)?;
+        old_node
+            .internal_node_right_child_mut()?
+            .copy_from_slice(&new_right_child.to_le_bytes());
+        current_num_keys -= 1;
+        old_node.set_internal_node_num_keys(current_num_keys);
+
+        // Drop old_node borrow before mutable operations
+        drop(old_node);
+
+        // Perform insertions into the new node
+        for cur_page_num in children_to_move {
+            internal_node_insert(cursor, new_page_num, cur_page_num)?;
+            let mut cur = cursor.table.pager.get(cur_page_num)?;
+            cur.set_node_parent(new_page_num);
+        }
+    }
+
+    // Compute max_after_split and determine destination
+    let max_after_split = {
+        let old_node = cursor.table.pager.get(old_page_num)?;
+        cursor.table.pager.get_node_max_key(&old_node)?
+    };
+    let destination_page_num = if child_max < max_after_split {
+        old_page_num
+    } else {
+        new_page_num
+    };
+
+    // Insert the child
+    internal_node_insert(cursor, destination_page_num, child_page_num)?;
+    {
+        let mut child = cursor.table.pager.get(child_page_num)?;
+        child.set_node_parent(destination_page_num);
+    }
+
+    // Update parent key and handle root splitting
+    {
+        let old_node = cursor.table.pager.get(old_page_num)?;
+        let mut parent = cursor.table.pager.get(parent_id)?;
+        parent
+            .update_internal_node_key(old_max, cursor.table.pager.get_node_max_key(&old_node)?)?;
+    }
+    if splitting_root {
+        let parent_page_num = {
+            let old_node = cursor.table.pager.get(old_page_num)?;
+            old_node.node_parent()?
+        };
+        internal_node_insert(cursor, parent_page_num, new_page_num)?;
+        let mut new_node = cursor.table.pager.get(new_page_num)?;
+        new_node.set_node_parent(parent_page_num);
+    }
+
+    Ok(())
 }
 
 // Add a new child/key pair to parent that corresponds to child
@@ -385,51 +542,63 @@ pub fn internal_node_insert(
     parent_page_num: u32,
     child_page_num: u32,
 ) -> Result<(), Error> {
+    debug!(parent_page_num, child_page_num, "Inserting internal node");
+
     let mut parent = cursor.table.pager.get(parent_page_num)?;
     let child = cursor.table.pager.get(child_page_num)?;
-
-    let child_max_key: u32 = child.get_node_max_key()?;
+    let child_max_key: u32 = cursor.table.pager.get_node_max_key(&child)?;
 
     // The index where the new cell (child/key pair) should be inserted depends on the maximum key in the new child.
     let index = parent.internal_node_find_child(child_max_key)?;
 
     let original_num_keys = parent.internal_node_num_keys()?;
-    parent.set_internal_node_num_keys(original_num_keys + 1)?;
+    parent.set_internal_node_num_keys(original_num_keys + 1);
 
     if original_num_keys >= btree::INTERNAL_NODE_MAX_CELLS as u32 {
-        return Err(Error::Storage(
-            "Need to implement splitting internal node".into(),
-        ));
+        drop(parent);
+        drop(child);
+        internal_node_split_and_insert(cursor, parent_page_num, child_page_num)?;
+        return Ok(());
     }
 
     let p2 = parent.clone(); // XXX: bullshit
-    let right_child_page_num_bytes = p2.internal_node_right_child()?;
-    let right_child_page_num = u32::from_le_bytes(
-        parent
-            .internal_node_right_child()?
-            .try_into()
-            .map_err(|e| err!(Storage, "Failed to decode right_child_page_num: {:?}", e))?,
-    );
-
+    let right_child_page_num = p2.internal_node_right_child()?;
+    // An internal node with a right child of INVALID_PAGE_NUM is empty
+    if right_child_page_num == btree::INVALID_PAGE_NUM {
+        parent.set_internal_node_right_child(child_page_num);
+        return Ok(());
+    }
     let right_child = cursor.table.pager.get(right_child_page_num)?;
 
-    if child_max_key > right_child.get_node_max_key()? {
-        // Replace right child
+    // If we are already at the max number of cells for a node, we cannot increment
+    // before splitting. Incrementing without inserting a new key/child pair
+    // and immediately calling internal_node_split_and_insert has the effect
+    // of creating a new key at (max_cells + 1) with an uninitialized value.
+    parent.set_internal_node_num_keys(original_num_keys + 1);
+
+    if child_max_key > cursor.table.pager.get_node_max_key(&right_child)? {
+        trace!("Replace right child");
+        //
         parent
             .internal_node_child_mut(original_num_keys)?
-            .copy_from_slice(right_child_page_num_bytes);
-        parent.set_internal_node_key(original_num_keys, right_child.get_node_max_key()?)?;
+            .copy_from_slice(&right_child_page_num.to_le_bytes());
+        parent.set_internal_node_key(
+            original_num_keys,
+            cursor.table.pager.get_node_max_key(&right_child)?,
+        )?;
         parent
             .internal_node_right_child_mut()?
             .copy_from_slice(&child_page_num.to_le_bytes());
     } else {
-        // Make room for the new cell
+        trace!("Make room for the new cell");
         let source_parent = parent.clone();
         for i in (index + 1..=original_num_keys).rev() {
             let destination = parent.internal_node_cell_mut(i)?;
             let source = source_parent.internal_node_cell(i - 1)?;
             destination.copy_from_slice(source);
         }
+        parent.set_internal_node_child(index, child_page_num)?;
+        parent.set_internal_node_key(index, child_max_key)?;
     }
 
     Ok(())
@@ -443,57 +612,66 @@ pub fn internal_node_insert(
 // tree remains height balanced without violating any B+-tree property.
 // At this point, we’ve already allocated the right child and moved the upper half into it.
 // Our function takes the right child as input and allocates a new page to store the left child.
-pub fn create_new_root(table: &mut Table, right_child_page_num: u32) -> Result<(), Error> {
+pub fn create_new_root(
+    cursor: &mut cursor::Cursor,
+    right_child_page_num: u32,
+) -> Result<(), Error> {
     // Handle splitting the root.
     // Old root copied to new page, becomes left child.
     // Address of right child passed in.
     // Re-initialize root page to contain the new root node.
     // New root node points to two children
     //
-    trace!("creating a new root");
-    let left_child_page_num = table.pager.get_unused_page_num();
+    debug!(right_child_page_num, "Creating a new root");
+    let left_child_page_num = cursor.table.pager.get_unused_page_num();
 
-    table.pager.try_create(right_child_page_num)?;
-    table.pager.try_create(left_child_page_num as u32)?;
+    cursor.table.pager.try_create(right_child_page_num)?;
+    cursor.table.pager.try_create(left_child_page_num as u32)?;
 
-    let mut root = table.pager.get(table.root_page_num)?;
-    let mut right_child = table.pager.get(right_child_page_num)?;
-    let mut left_child = table.pager.get(left_child_page_num as u32)?;
+    let mut root = cursor.table.pager.get(cursor.table.root_page_num)?;
+    let mut right_child = cursor.table.pager.get(right_child_page_num)?;
+    let mut left_child = cursor.table.pager.get(left_child_page_num as u32)?;
 
     // The old root is copied to the left child so we can reuse the root page
     left_child.data.copy_from_slice(&root.data);
-    left_child.set_node_root(false)?;
+    left_child.set_node_root(false);
 
     // Finally we initialize the root page as a new internal node with two children.
     initialize_internal_node(&mut root)?;
-    root.set_node_root(true)?;
-    root.set_internal_node_num_keys(1)?;
+    root.set_node_root(true);
+    root.set_internal_node_num_keys(1);
     root.internal_node_child_mut(0)?
         .copy_from_slice((left_child_page_num as u32).to_le_bytes().as_slice());
 
-    let left_child_max_key = left_child.get_node_max_key()?;
+    let left_child_max_key = cursor.table.pager.get_node_max_key(&left_child)?;
     root.set_internal_node_key(0, left_child_max_key)?;
     root.internal_node_right_child_mut()?
         .copy_from_slice((right_child_page_num as u32).to_le_bytes().as_slice());
 
-    left_child.set_node_parent(table.root_page_num)?;
-    right_child.set_node_parent(table.root_page_num)?;
+    left_child.set_node_parent(cursor.table.root_page_num);
+    right_child.set_node_parent(cursor.table.root_page_num);
 
     Ok(())
 }
 
 pub fn initialize_leaf_node(node: &mut Node) -> Result<(), Error> {
-    node.set_node_type(btree::NodeType::NodeLeaf)?;
-    node.set_node_root(false)?;
-    node.set_leaf_node_num_cells(0)?;
-    node.set_leaf_node_next_leaf(0)?; // 0 represents no sibling
+    node.set_node_type(btree::NodeType::NodeLeaf);
+    node.set_node_root(false);
+    node.set_leaf_node_num_cells(0);
+    node.set_leaf_node_next_leaf(0); // 0 represents no sibling
     Ok(())
 }
 
 pub fn initialize_internal_node(node: &mut Node) -> Result<(), Error> {
-    node.set_node_type(btree::NodeType::NodeInternal)?;
-    node.set_node_root(false)?;
-    node.set_internal_node_num_keys(0)?;
+    node.set_node_type(btree::NodeType::NodeInternal);
+    node.set_node_root(false);
+    node.set_internal_node_num_keys(0);
+
+    // Necessary because the root page number is 0; by not initializing an internal
+    // node's right child to an invalid page number when initializing the node, we may
+    // end up with 0 as the node's right child, which makes the node a parent of the root
+    node.set_internal_node_right_child(btree::INVALID_PAGE_NUM);
+
     Ok(())
 }
 
