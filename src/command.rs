@@ -141,10 +141,7 @@ fn execute_describe_statement(
         })
         .collect();
 
-    Ok(SqlResult::ResultSet {
-        columns,
-        rows: rows,
-    })
+    Ok(SqlResult::ResultSet { columns, rows })
 }
 
 /// Executes an `INSERT` statement.
@@ -178,7 +175,7 @@ fn execute_update_statement(
     stmt: sql::UpdateStatement,
 ) -> Result<SqlResult, errors::Error> {
     let table = session.database.find_table(&stmt.table)?;
-    let mut locked_table = table
+    let mut _locked_table = table
         .lock()
         .map_err(|_| errors::Error::LockTable("Failed to lock table for update".to_string()))?;
     // let affected_rows = storage::update_rows(&mut locked_table, &stmt.sets, &stmt.where_clause)?;
@@ -199,7 +196,7 @@ fn execute_delete_statement(
     stmt: sql::DeleteStatement,
 ) -> Result<SqlResult, errors::Error> {
     let table = session.database.find_table(&stmt.table)?;
-    let mut locked_table = table
+    let mut _locked_table = table
         .lock()
         .map_err(|_| errors::Error::LockTable("Failed to lock table for delete".to_string()))?;
     // let affected_rows = storage::delete_rows(&mut locked_table, &stmt.where_clause)?;

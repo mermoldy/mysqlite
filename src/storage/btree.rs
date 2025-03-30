@@ -46,7 +46,6 @@ use super::table::PAGE_SIZE;
 use crate::errors::Error;
 use std::cmp::Ordering;
 use std::fmt;
-use tracing::field::{self, Visit};
 
 /// Represents the type of a B-tree node.
 ///

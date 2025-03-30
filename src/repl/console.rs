@@ -1,5 +1,5 @@
 use super::{buffer, prompt, status};
-use crate::{command, database, errors, session, sql, storage};
+use crate::{command, database, errors, session, sql};
 use crossterm::{
     cursor, execute,
     style::{Color, Print, ResetColor, SetForegroundColor},

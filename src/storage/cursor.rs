@@ -2,7 +2,7 @@
 //!
 //! Provides cursor-based navigation and manipulation of database tables,
 //! enabling traversal and modification of table data.
-use super::{btree::Node, btree::NodeType, table};
+use super::{btree::NodeType, table};
 use crate::errors::Error;
 use tracing::{debug, trace};
 

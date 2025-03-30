@@ -719,6 +719,7 @@ pub fn load_table(database: &String, name: &String) -> Result<Table, Error> {
             break;
         }
         let page_header: PageHeader = decode_header(&page_header_buf)?;
+        debug!(page_n_recs = page_header.page_n_recs, "Read page");
 
         let mut page_buf: [u8; 4096] = [0; 4096];
         let read = file.read(&mut page_buf)?;
