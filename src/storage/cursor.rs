@@ -25,29 +25,6 @@ pub struct Cursor<'a> {
 }
 
 impl<'a> Cursor<'a> {
-    /// Writes a row value at the current cursor position
-    ///
-    /// # Arguments
-    /// * `row` - Byte slice representing the row data
-    ///
-    /// # Errors
-    /// Returns an error if:
-    /// - Page cannot be retrieved
-    /// - Writing to the page fails
-    // pub fn write_value(&mut self, row: &[u8]) -> Result<(), Error> {
-    //     let page_num = self.page_num;
-    //     let mut page = self
-    //         .table
-    //         .pager
-    //         .get(page_num)
-    //         .map_err(|e| Error::Storage(format!("Failed to get page: {}", e)))?
-    //         .lock()
-    //         .map_err(|_| Error::Storage("Page lock poisoned".into()))?;
-
-    //     page.set_leaf_node_value(self.cell_num as usize, row)
-    //         .map_err(|e| Error::Storage(format!("Failed to write value: {}", e)))
-    // }
-
     /// Reads a row value from the current cursor position
     ///
     /// # Arguments
