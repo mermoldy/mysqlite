@@ -21,7 +21,7 @@ Type "use <name>" to open a database.
 Commands end with ; or \g. Type 'help;' or '\h' for help.
 "#;
 
-const HELP: &str = r#"List of all Marble commands:
+const HELP: &str = r#"List of all MySQLite commands:
 Note that all text commands must be first on line and end with ';'
 
 ?           (\?) Synonym for 'help'.
@@ -29,7 +29,7 @@ help        (\h) Display this help.
 use         (\u) Use another database. Takes database name as argument.
 version     (\v) Show version information.
 print_btree Print B-Tree node.
-quit        (\q) Quit Marble.
+quit        (\q) Quit MySQLite.
 "#;
 
 /// Starts a REPL session in raw console mode.

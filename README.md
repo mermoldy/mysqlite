@@ -1,4 +1,4 @@
-# marble
+# mysqlite
 
 A playground for learning database stuff.
 
@@ -15,7 +15,7 @@ The internal architecture follows SQLite’s design:
 
 ## Storage
 
-The marble storage backend is organized similarly to [InnoDB](https://dev.mysql.com/doc/refman/8.4/en/innodb-storage-engine.html). Each table has its own tablespace file (`.tbd`). The file contains a tablespace header and a set of fixed-size pages. Each page has its own header and a data section that stores actual rows. All pages are linked via previous/next relations, so the tablespace file represents a linked list of data pages.
+The mysqlite storage backend is organized similarly to [InnoDB](https://dev.mysql.com/doc/refman/8.4/en/innodb-storage-engine.html). Each table has its own tablespace file (`.tbd`). The file contains a tablespace header and a set of fixed-size pages. Each page has its own header and a data section that stores actual rows. All pages are linked via previous/next relations, so the tablespace file represents a linked list of data pages.
 
 ## 📌 SQLite Clone - Progress Tracker
 

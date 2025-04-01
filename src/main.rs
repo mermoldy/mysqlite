@@ -16,20 +16,20 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Parser)]
 #[command(
-    name = "marble",
+    name = "mysqlite",
     version = VERSION,
     about = "Tiny SQL database."
 )]
 
 struct Cli {
     /// The server host address to bind to. Defaults to 0.0.0.0, allowing connections from any interface.
-    #[arg(long, env = "MARBLE_HOST", default_value = "0.0.0.0")]
+    #[arg(long, env = "MYSQLITE_HOST", default_value = "0.0.0.0")]
     host: Option<String>,
     /// The server port number to listen on. Defaults to 4012.
-    #[arg(long, env = "MARBLE_PORT", default_value = "4012")]
+    #[arg(long, env = "MYSQLITE_PORT", default_value = "4012")]
     port: Option<u16>,
     /// Start the database server as a standalone process.
-    #[arg(long, short, env = "MARBLE_SERVER", default_value = "false")]
+    #[arg(long, short, env = "MYSQLITE_SERVER", default_value = "false")]
     server: bool,
 }
 
@@ -37,7 +37,7 @@ fn main() {
     let file = OpenOptions::new()
         .append(true)
         .create(true)
-        .open("marble.log")
+        .open("mysqlite.log")
         .expect("Failed to open log file");
 
     tracing_subscriber::fmt()
